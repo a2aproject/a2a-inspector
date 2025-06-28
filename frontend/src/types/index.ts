@@ -22,6 +22,7 @@ export interface DebugLog {
   type: 'request' | 'response' | 'error' | 'validation_error';
   data: unknown;
   id: string;
+  timestamp: number;
 }
 
 export interface AgentCard {
@@ -53,7 +54,6 @@ export interface ChatMessage {
   sender: 'user' | 'agent' | 'system' | 'error';
   content: string;
   timestamp: Date;
-  isHtml?: boolean;
   validationErrors?: string[];
   kind?: string;
 }

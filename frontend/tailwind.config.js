@@ -10,7 +10,10 @@ export default {
       colors: {
         google: {
           blue: '#4285F4',
-          red: '#EA4335',
+          red: {
+            DEFAULT: '#EA4335',
+            dark: '#B9342A',
+          },
           yellow: '#FBBC05',
           green: '#34A853',
         },

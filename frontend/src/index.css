@@ -47,8 +47,14 @@
     @apply shadow-2xl;
   }
 
-  .icon-gradient-blue-green {
-    @apply bg-gradient-to-br from-google-blue to-google-green;
+  .btn-danger {
+    @apply px-6 py-3 font-bold text-white rounded-lg transition-colors;
+    @apply bg-google-red hover:bg-google-red/90;
+    @apply dark:bg-google-red-dark dark:hover:bg-google-red-dark/90;
+  }
+ 
+   .icon-gradient-blue-green {
+     @apply bg-gradient-to-br from-google-blue to-google-green;
     @apply dark:from-google-blue/70 dark:to-google-green/70;
   }
 

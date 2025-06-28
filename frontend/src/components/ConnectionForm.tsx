@@ -98,7 +98,7 @@ export const ConnectionForm = ({ onConnect, onDisconnect, isConnecting, isConnec
           </button>
 
           {showHeaders && (
-            <div className="mt-4 space-y-3 p-4 bg-light-bg dark:bg-dark-bg rounded-lg animate-fade-in">
+            <div className="mt-4 space-y-3 p-4 bg-surface rounded-lg animate-fade-in">
               {headers.map((header) => (
                 <div key={header.id} className="flex space-x-2 items-center">
                   <input
@@ -142,7 +142,7 @@ export const ConnectionForm = ({ onConnect, onDisconnect, isConnecting, isConnec
             <button
               type="button"
               onClick={onDisconnect}
-              className="btn-danger px-6 py-3 flex items-center justify-center"
+              className="btn-danger flex items-center justify-center"
             >
               <FiX className="w-6 h-6 mr-2" />
               <span>Disconnect</span>

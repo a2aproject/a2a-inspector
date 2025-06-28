@@ -68,10 +68,6 @@ function App() {
     }
   }, [socket.isConnected, pendingConnection, proceedWithConnection]);
 
-  // useEffect(() => {
-  //   mainRef.current?.scrollTo(0, 0);
-  // }, []);
-
   // Handle connection to agent
   const handleConnect = useCallback(async (url: string, headers: CustomHeaders) => {
     if (!socket.socket) return;
@@ -88,7 +84,7 @@ function App() {
   const handleSendMessage = useCallback((messageText: string) => {
     if (!socket.socket || !connectionState.isConnected) return;
 
-    const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     
     // Add user message to chat
     const userMessage: ChatMessage = {
@@ -125,7 +121,7 @@ function App() {
   }, [socket, connectionState.isConnected]);
 
   // Socket event handlers
-  useSocketEvent(socket, 'client_initialized', (data: { status: string; message?: string }) => {
+  const handleClientInitialized = useCallback((data: { status: string; message?: string }) => {
     if (data.status === 'success') {
       setConnectionState(prev => ({
         ...prev,
@@ -148,14 +144,15 @@ function App() {
         error: data.message || 'Failed to initialize client',
       }));
     }
-  });
+  }, []);
+  useSocketEvent(socket, 'client_initialized', handleClientInitialized);
 
-  useSocketEvent(socket, 'agent_response', (event: AgentResponseEvent) => {
+  const handleAgentResponse = useCallback((event: AgentResponseEvent) => {
     if (event.contextId) {
       setContextId(event.contextId);
     }
 
-    const messageId = `agent-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     
     if (event.error) {
       const errorMessage: ChatMessage = {
@@ -171,13 +168,11 @@ function App() {
     }
 
     let content = '';
-    let isHtml = false;
 
     switch (event.kind) {
       case 'task':
         if (event.status) {
           content = `Task created with status: ${event.status.state}`;
-          isHtml = true;
         }
         break;
       
@@ -185,7 +180,6 @@ function App() {
         const statusText = event.status?.message?.parts?.[0]?.text;
         if (statusText) {
           content = statusText;
-          isHtml = true;
         }
         break;
       }
@@ -194,14 +188,11 @@ function App() {
         event.artifact?.parts?.forEach(part => {
           if ('text' in part && part.text) {
             content += part.text;
-            isHtml = true;
           } else if ('file' in part && part.file) {
             const { uri, mimeType } = part.file;
             content += `File received (${mimeType}): [Open Link](${uri})`;
-            isHtml = true;
           } else if ('data' in part && part.data) {
             content += `\`\`\`json\n${JSON.stringify(part.data, null, 2)}\n\`\`\``;
-            isHtml = true;
           }
         });
         break;
@@ -210,7 +201,6 @@ function App() {
         const textPart = event.parts?.find(p => p.text);
         if (textPart && textPart.text) {
           content = textPart.text;
-          isHtml = true;
         }
         break;
       }
@@ -222,17 +212,18 @@ function App() {
         sender: 'agent',
         content: content,
         timestamp: new Date(),
-        isHtml,
         validationErrors: event.validation_errors,
         kind: event.kind,
       };
       setMessages(prev => [...prev, agentMessage]);
     }
-  });
+  }, []);
+  useSocketEvent(socket, 'agent_response', handleAgentResponse);
 
-  useSocketEvent(socket, 'debug_log', (log: DebugLog) => {
+  const handleDebugLog = useCallback((log: DebugLog) => {
     setDebugLogs(prev => [...prev, log]);
-  });
+  }, []);
+  useSocketEvent(socket, 'debug_log', handleDebugLog);
 
   const clearDebugLogs = () => {
     setDebugLogs([]);
@@ -285,8 +276,6 @@ function App() {
           </div>
         </div>
       </main>
-
-      {/* Debug Console */}
       <DebugConsole logs={debugLogs} onClear={clearDebugLogs} />
     </div>
   );

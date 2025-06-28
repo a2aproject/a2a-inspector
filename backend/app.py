@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -322,11 +323,15 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         )
 
 # Serve React App
-app.mount('/', StaticFiles(directory='../frontend/dist', html=True), name='static')
+STATIC_DIR = Path(__file__).parent.parent / 'frontend' / 'dist'
+app.mount(
+    '/', StaticFiles(directory=STATIC_DIR, html=True), name='static'
+)
+
 
 @app.exception_handler(404)
 async def not_found(request: Request, exc: Exception):
-    return FileResponse('../frontend/dist/index.html')
+    return FileResponse(STATIC_DIR / 'index.html')
 
 # ==============================================================================
 # Main Execution

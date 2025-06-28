@@ -49,8 +49,7 @@ export const Chat = ({ messages, onSendMessage, isConnected, isEnabled }: ChatPr
     if (message.sender === 'agent') {
       return <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>;
     }
-
-    // The user message is not rendered as markdown for security reasons.
+    
     return <span>{message.content}</span>;
   };
 

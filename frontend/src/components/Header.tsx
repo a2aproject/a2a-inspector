@@ -13,8 +13,8 @@ export const Header = () => {
             <img
               src={
                 theme === 'dark'
-                  ? "https://a2aproject.github.io/A2A/latest/assets/a2a-logo-white.svg"
-                  : "https://a2aproject.github.io/A2A/latest/assets/a2a-logo-black.svg"
+                  ? "https://google.github.io/adk-docs/assets/agent-development-kit.png"
+                  : "https://google.github.io/adk-docs/assets/agent-development-kit.png"
               }
               alt="A2A Logo"
               className="w-12 h-12"

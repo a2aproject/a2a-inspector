@@ -148,7 +148,7 @@ export const DebugConsole = ({ logs, onClear }: DebugConsoleProps) => {
                       {log.type.replace('_', ' ')}
                     </span>
                     <span className="text-xs text-text-secondary">
-                      {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </span>
                   </div>
                   <span className="text-xs text-text-secondary font-mono">

@@ -14,17 +14,14 @@ export const useSocket = () => {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('Connected to server:', socket.id);
       setIsConnected(true);
     });
 
     socket.on('disconnect', () => {
-      console.log('Disconnected from server');
       setIsConnected(false);
     });
 
-    socket.on('connect_error', (error) => {
-      console.error('Connection error:', error);
+    socket.on('connect_error', () => {
       setIsConnected(false);
     });
 
@@ -36,9 +33,7 @@ export const useSocket = () => {
   const emit = (event: string, data: unknown) => {
     if (socketRef.current?.connected) {
       socketRef.current.emit(event, data);
-    } else {
-      console.error(`Socket not connected. Cannot emit event: ${event}`);
-    }
+    } 
   };
 
   const on = <T>(event: string, callback: (data: T) => void) => {
