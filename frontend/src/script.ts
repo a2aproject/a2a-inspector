@@ -41,6 +41,8 @@ declare global {
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
+  const INITIALIZATION_TIMEOUT_MS = 10000;
+
   const connectBtn = document.getElementById(
     'connect-btn',
   ) as HTMLButtonElement;
@@ -263,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrorsContainer.innerHTML = `<p class="error-text">Error: Client initialization timed out.</p>`;
         chatInput.disabled = true;
         sendBtn.disabled = true;
-      }, 10000); 
+      }, INITIALIZATION_TIMEOUT_MS); 
 
       socket.emit('initialize_client', {
         url: agentCardUrl,
