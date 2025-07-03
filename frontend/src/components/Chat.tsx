@@ -175,6 +175,7 @@ export const Chat = ({ messages, onSendMessage, isConnected, isEnabled }: ChatPr
               type="submit"
               disabled={!isEnabled || !inputValue.trim()}
               className="btn-primary p-3 rounded-full"
+              aria-label="Send"
             >
               <FiSend className="w-6 h-6" />
             </button>
