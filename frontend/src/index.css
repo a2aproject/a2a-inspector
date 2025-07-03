@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #F8F9FA;
+    --surface: #FFFFFF;
+    --text-primary: #202124;
+    --text-secondary: #5F6368;
+    --border: #E0E0E0;
+  }
+
+  .dark {
+    --background: #121212;
+    --surface: #1E1E1E;
+    --text-primary: #E8EAED;
+    --text-secondary: #969BA1;
+    --border: #3C4043;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--text-primary);
+    font-family: 'Google Sans', 'Roboto', 'Arial', sans-serif;
+    transition: background-color 0.3s, color 0.3s;
+  }
+}
+
+@layer components {
+  .card {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    @apply rounded-2xl shadow-lg transition-colors;
+    
+  }
+
+  .btn-primary {
+    @apply px-6 py-3 font-bold text-white rounded-lg transition-all duration-300 ease-in-out cursor-pointer;
+    @apply bg-gradient-to-r from-google-blue to-google-green;
+    @apply dark:from-google-blue/70 dark:to-google-green/70;
+  }
+
+  .btn-primary:hover {
+    @apply shadow-2xl;
+  }
+
+  .btn-danger {
+    @apply px-6 py-3 font-bold text-white rounded-lg transition-colors;
+    @apply bg-google-red hover:bg-google-red/90;
+    @apply dark:bg-google-red-dark dark:hover:bg-google-red-dark/90;
+  }
+ 
+   .icon-gradient-blue-green {
+     @apply bg-gradient-to-br from-google-blue to-google-green;
+    @apply dark:from-google-blue/70 dark:to-google-green/70;
+  }
+
+  .icon-gradient-yellow-red {
+    @apply bg-gradient-to-br from-google-yellow to-google-red;
+    @apply dark:from-google-yellow/70 dark:to-google-red/70;
+  }
+}

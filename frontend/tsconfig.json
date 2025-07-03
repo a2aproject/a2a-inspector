@@ -1,17 +1,7 @@
 {
-  "extends": "./node_modules/gts/tsconfig-google.json",
-  "compilerOptions": {
-    "rootDir": ".",
-    "outDir": "build",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "lib": ["es2017", "dom"],
-    "target": "es2017",
-    "moduleResolution": "bundler",
-    "module": "esnext"
-  },
-  "include": [
-    "src/**/*.ts",
-    "test/**/*.ts"
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
   ]
 }

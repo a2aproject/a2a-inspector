@@ -1,5 +1,5 @@
 # Stage 1: Build the frontend assets
-FROM node:18-alpine AS frontend-builder
+FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 
 # Copy package files and configuration needed for npm ci
@@ -23,7 +23,7 @@ RUN uv sync --no-cache
 RUN uv pip install validators
 COPY backend/ ./backend/
 RUN mkdir -p /app/frontend
-COPY --from=frontend-builder /app/public /app/frontend/public
+COPY --from=frontend-builder /app/dist /app/frontend/dist
 
 
 WORKDIR /app/backend

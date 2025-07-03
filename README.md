@@ -2,7 +2,7 @@
 
 The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the Google A2A (Agent-to-Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
 
-The application is built with a FastAPI backend and a TypeScript frontend.
+The application is built with a FastAPI backend and a React frontend using Vite.
 
 ## Features
 
@@ -23,7 +23,7 @@ The application is built with a FastAPI backend and a TypeScript frontend.
 This repository is organized into two main parts:
 
 - `./backend/`: Contains the Python FastAPI server that handles WebSocket connections and communication with the A2A agent.
-- `./frontend/`: Contains the TypeScript and CSS source files for the web interface.
+- `./frontend/`: Contains the React and TypeScript source files for the web interface.
 
 ## Setup and Running the Application
 
@@ -62,39 +62,36 @@ cd ..
 
 You can run the A2A Inspector in two ways. Choose the option that best fits your workflow:
 
-- Option 1 (Run Locally): Best for developers who are actively modifying the code. This method uses two separate terminal processes and provides live-reloading for both the frontend and backend.
-- Option 2 (Run with Docker): Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
+- **Option 1 (Run Locally):** Best for developers who are actively modifying the code. This method uses two separate terminal processes and provides live-reloading for both the frontend and backend.
+- **Option 2 (Run with Docker):** Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
 
 #### Option 1: Run Locally 
 
 This approach requires you to run two processes concurrently in separate terminal windows. Make sure you are in the root directory of the project (a2a-inspector) before starting.
 
-**In your first terminal**, run the frontend development server. This will build the assets and automatically rebuild them when you make changes.
+**In your first terminal**, run the frontend development server. This will start a hot-reloading development environment for the React app.
 
 ```sh
 # Navigate to the frontend directory
 cd frontend
 
 # Build the frontend and watch for changes
-npm run build -- --watch
+npm run dev
 ```
 
 **In a second terminal**, run the backend Python server.
 
 ```sh
-# Navigate to the backend directory
-cd backend
-
-# Run the FastAPI server with live reload
-uv run app.py
+# Run the FastAPI server with live reload from the root directory
+uv run backend.app:app --reload
 ```
 
 ##### Access the Inspector
 
 Once both processes are running, open your web browser and navigate to:
-**[http://127.0.0.1:5001](http://127.0.0.1:5001)**
+**[http://127.0.0.1:3000](http://127.0.0.1:3000)**
 
-#### Option Two: Run with Docker
+#### Option 2: Run with Docker
 
 This approach builds the entire application into a single Docker image and runs it as a container. This is the simplest way to run the inspector if you have Docker installed and don't need to modify the code.
 
