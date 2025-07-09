@@ -12,6 +12,10 @@ RUN npm ci
 
 # Copy remaining files
 COPY frontend/ ./
+
+# Fix to run on macOS/Alpine (rebuild esbuild for the container's platform)
+RUN npm rebuild esbuild
+
 RUN npm run build
 
 # Stage 2: Build the final application with the backend
