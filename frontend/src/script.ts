@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
   const INITIALIZATION_TIMEOUT_MS = 10000;
+  const MAX_LOGS = 500; // Define the maximum number of logs to store
 
   const connectBtn = document.getElementById(
     'connect-btn',
@@ -427,6 +428,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   socket.on('debug_log', (log: DebugLog) => {
+    if (Object.keys(rawLogStore).length >= MAX_LOGS) {
+      const oldestKey = Object.keys(rawLogStore).reduce((oldest, current) => {
+        return parseInt(current.split('-')[1]) < parseInt(oldest.split('-')[1]) ? current : oldest;
+      });
+      delete rawLogStore[oldestKey];
+    }
+    
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
 
