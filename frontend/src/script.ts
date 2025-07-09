@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
   const INITIALIZATION_TIMEOUT_MS = 10000;
-  const MAX_LOGS = 500; // Define the maximum number of logs to store
+  const MAX_LOGS = 500;
 
   const connectBtn = document.getElementById(
     'connect-btn',
@@ -96,6 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  const logIdQueue: string[] = [];
   let initializationTimeout: number;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -189,6 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
   clearConsoleBtn.addEventListener('click', () => {
     debugContent.innerHTML = '';
     Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+    logIdQueue.length = 0; 
   });
 
   toggleConsoleBtn.addEventListener('click', () => {
@@ -298,6 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<p class="placeholder-text">Ready to chat.</p>';
         debugContent.innerHTML = '';
         Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+        logIdQueue.length = 0;
         Object.keys(messageJsonStore).forEach(
           key => delete messageJsonStore[key],
         );
@@ -428,13 +431,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   socket.on('debug_log', (log: DebugLog) => {
-    if (Object.keys(rawLogStore).length >= MAX_LOGS) {
-      const oldestKey = Object.keys(rawLogStore).reduce((oldest, current) => {
-        return parseInt(current.split('-')[1]) < parseInt(oldest.split('-')[1]) ? current : oldest;
-      });
-      delete rawLogStore[oldestKey];
-    }
-    
+    logIdQueue.push(log.id);
+    if (logIdQueue.length > MAX_LOGS) {
+      const oldestKey = logIdQueue.shift();
+      if (oldestKey) {
+        delete rawLogStore[oldestKey];
+      }
+    }    
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
 
