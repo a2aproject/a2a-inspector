@@ -41,6 +41,8 @@ declare global {
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
+  const INITIALIZATION_TIMEOUT_MS = 10000;
+
   const connectBtn = document.getElementById(
     'connect-btn',
   ) as HTMLButtonElement;
@@ -93,6 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  let initializationTimeout: number;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -257,6 +260,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       validationErrorsContainer.innerHTML =
         '<p class="placeholder-text">Initializing client session...</p>';
+
+      initializationTimeout = setTimeout(() => {
+        validationErrorsContainer.innerHTML = `<p class="error-text">Error: Client initialization timed out.</p>`;
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+      }, INITIALIZATION_TIMEOUT_MS); 
+
       socket.emit('initialize_client', {
         url: agentCardUrl,
         customHeaders: customHeaders,
@@ -269,6 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<p style="color: green;">Agent card is valid.</p>';
       }
     } catch (error) {
+      clearTimeout(initializationTimeout);
       validationErrorsContainer.innerHTML = `<p style="color: red;">Error: ${(error as Error).message}</p>`;
       chatInput.disabled = true;
       sendBtn.disabled = true;
@@ -278,6 +289,7 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on(
     'client_initialized',
     (data: {status: string; message?: string}) => {
+      clearTimeout(initializationTimeout);
       if (data.status === 'success') {
         chatInput.disabled = false;
         sendBtn.disabled = false;
