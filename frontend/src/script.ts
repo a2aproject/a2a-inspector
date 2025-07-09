@@ -432,12 +432,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   socket.on('debug_log', (log: DebugLog) => {
     logIdQueue.push(log.id);
-    if (logIdQueue.length > MAX_LOGS) {
+    while (logIdQueue.length > MAX_LOGS) {
       const oldestKey = logIdQueue.shift();
       if (oldestKey) {
         delete rawLogStore[oldestKey];
       }
-    }    
+    }
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
 
