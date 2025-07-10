@@ -98,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
   const logIdQueue: string[] = [];
   let initializationTimeout: number;
+  let isProcessingLogQueue = false;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -430,14 +431,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  socket.on('debug_log', (log: DebugLog) => {
-    logIdQueue.push(log.id);
+  function processLogQueue() {
+    if (isProcessingLogQueue) return;
+    isProcessingLogQueue = true;
+
     while (logIdQueue.length > MAX_LOGS) {
       const oldestKey = logIdQueue.shift();
-      if (oldestKey) {
+      if (oldestKey && rawLogStore.hasOwnProperty(oldestKey)) {
         delete rawLogStore[oldestKey];
       }
     }
+    isProcessingLogQueue = false;
+  }
+
+  socket.on('debug_log', (log: DebugLog) => {
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
 
@@ -461,6 +468,8 @@ document.addEventListener('DOMContentLoaded', () => {
       rawLogStore[log.id] = {};
     }
     rawLogStore[log.id][log.type] = log.data;
+    logIdQueue.push(log.id);
+    setTimeout(processLogQueue, 0);
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
