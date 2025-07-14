@@ -12,7 +12,7 @@
     "target": "es2017",
     "moduleResolution": "bundler",
     "module": "esnext",
-    "skipLibCheck": true,
+    "skipLibCheck": true
   },
   "include": [
     "src/**/*.ts",
