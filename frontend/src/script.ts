@@ -97,7 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
   const logIdQueue: string[] = [];
-  let initializationTimeout: number;
+  let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -266,10 +266,11 @@ document.addEventListener('DOMContentLoaded', () => {
         '<p class="placeholder-text">Initializing client session...</p>';
 
       initializationTimeout = setTimeout(() => {
-        validationErrorsContainer.innerHTML = `<p class="error-text">Error: Client initialization timed out.</p>`;
+        validationErrorsContainer.innerHTML =
+          '<p class="error-text">Error: Client initialization timed out.</p>';
         chatInput.disabled = true;
         sendBtn.disabled = true;
-      }, INITIALIZATION_TIMEOUT_MS); 
+      }, INITIALIZATION_TIMEOUT_MS);
 
       socket.emit('initialize_client', {
         url: agentCardUrl,
