@@ -1,5 +1,5 @@
-import {io} from 'socket.io-client';
-import {marked} from 'marked';
+import { io } from 'socket.io-client';
+import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 interface AgentResponseEvent {
@@ -9,16 +9,16 @@ interface AgentResponseEvent {
   error?: string;
   status?: {
     state: string;
-    message?: {parts?: {text?: string}[]};
+    message?: { parts?: { text?: string }[] };
   };
   artifact?: {
     parts?: (
-      | {file?: {uri: string; mimeType: string}}
-      | {text?: string}
-      | {data?: object}
+      | { file?: { uri: string; mimeType: string } }
+      | { text?: string }
+      | { data?: object }
     )[];
   };
-  parts?: {text?: string}[];
+  parts?: { text?: string }[];
   validation_errors: string[];
 }
 
@@ -94,8 +94,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let isResizing = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
-  const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
-  let initializationTimeout: number;
+  const messageJsonStore: { [key: string]: AgentResponseEvent } = {};
+  let initializationTimeout: NodeJS.Timeout;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -244,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, sid: socket.id}),
+        body: JSON.stringify({ url: agentCardUrl, sid: socket.id }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrorsContainer.innerHTML = `<p class="error-text">Error: Client initialization timed out.</p>`;
         chatInput.disabled = true;
         sendBtn.disabled = true;
-      }, INITIALIZATION_TIMEOUT_MS); 
+      }, INITIALIZATION_TIMEOUT_MS);
 
       socket.emit('initialize_client', {
         url: agentCardUrl,
@@ -288,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   socket.on(
     'client_initialized',
-    (data: {status: string; message?: string}) => {
+    (data: { status: string; message?: string }) => {
       clearTimeout(initializationTimeout);
       if (data.status === 'success') {
         chatInput.disabled = false;
@@ -384,7 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if ('text' in p && p.text) {
             content = DOMPurify.sanitize(marked.parse(p.text) as string);
           } else if ('file' in p && p.file) {
-            const {uri, mimeType} = p.file;
+            const { uri, mimeType } = p.file;
             const sanitizedMimeType = DOMPurify.sanitize(mimeType);
             const sanitizedUri = DOMPurify.sanitize(uri);
             content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
