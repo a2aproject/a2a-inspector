@@ -14,7 +14,7 @@ RUN npm ci
 COPY frontend/ ./
 
 # Rebuild native dependencies like esbuild for the container's architecture (Alpine)
-# in case host node_modules were copied over.RUN 
+# in case host node_modules were copied over.
 RUN npm rebuild esbuild
 
 RUN npm run build
