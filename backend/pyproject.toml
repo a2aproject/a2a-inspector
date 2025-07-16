@@ -2,6 +2,4 @@
 name = "a2a-inspector"
 version = "0.1.0"
 readme = "README.md"
-dependencies = [
-  "a2a-sdk>=0.2.12",
-]
+dependencies = []
