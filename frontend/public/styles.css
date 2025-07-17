@@ -63,6 +63,11 @@ h2 {
     margin-bottom: 10px;
 }
 
+.url-input-container {
+    display: flex;
+    flex-direction: column;
+}
+
 .connect-btn-container {
     display: flex;
     justify-content: flex-end;
@@ -127,6 +132,7 @@ h2 {
 }
 
 #agent-card-url,
+#agent-card-path,
 #chat-input {
     flex-grow: 1;
     padding: 10px;
