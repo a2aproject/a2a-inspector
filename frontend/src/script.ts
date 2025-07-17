@@ -95,7 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
-  let initializationTimeout: number;
+  let initializationTimeout: ReturnType<typeof setTimeout>;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -262,10 +262,11 @@ document.addEventListener('DOMContentLoaded', () => {
         '<p class="placeholder-text">Initializing client session...</p>';
 
       initializationTimeout = setTimeout(() => {
-        validationErrorsContainer.innerHTML = `<p class="error-text">Error: Client initialization timed out.</p>`;
+        validationErrorsContainer.innerHTML =
+          '<p class="error-text">Error: Client initialization timed out.</p>';
         chatInput.disabled = true;
         sendBtn.disabled = true;
-      }, INITIALIZATION_TIMEOUT_MS); 
+      }, INITIALIZATION_TIMEOUT_MS);
 
       socket.emit('initialize_client', {
         url: agentCardUrl,

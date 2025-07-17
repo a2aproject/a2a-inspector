@@ -12,6 +12,11 @@ RUN npm ci
 
 # Copy remaining files
 COPY frontend/ ./
+
+# Rebuild native dependencies like esbuild for the container's architecture (Alpine)
+# in case host node_modules were copied over.
+RUN npm rebuild esbuild
+
 RUN npm run build
 
 # Stage 2: Build the final application with the backend
