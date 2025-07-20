@@ -226,8 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     agentCardCodeContent.textContent = '';
-    validationErrorsContainer.innerHTML =
-      '<p class="placeholder-text">Fetching Agent Card...</p>';
+    validationErrorsContainer.innerHTML = '<div class="loader"></div>';
     chatInput.disabled = true;
     sendBtn.disabled = true;
 
@@ -239,6 +238,8 @@ document.addEventListener('DOMContentLoaded', () => {
       'Content-Type': 'application/json',
       ...customHeaders,
     };
+
+    const loader = validationErrorsContainer.querySelector('.loader');
 
     try {
       const response = await fetch('/agent-card', {
