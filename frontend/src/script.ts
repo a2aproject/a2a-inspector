@@ -229,10 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const parsedUrl = new URL(agentCardUrl);
-      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-        throw new Error('Unsupported protocol');
-      }
+      new URL(agentCardUrl);
     } catch (error) {
       alert(
         'Invalid URL. Please enter a complete and valid URL (e.g., http://example.com).',
