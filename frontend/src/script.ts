@@ -239,8 +239,6 @@ document.addEventListener('DOMContentLoaded', () => {
       ...customHeaders,
     };
 
-    const loader = validationErrorsContainer.querySelector('.loader');
-
     try {
       const response = await fetch('/agent-card', {
         method: 'POST',
