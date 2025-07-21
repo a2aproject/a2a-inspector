@@ -228,11 +228,15 @@ document.addEventListener('DOMContentLoaded', () => {
       agentCardUrl = 'http://' + agentCardUrl;
     }
 
+    // Validate that the URL uses http or https protocol
     try {
-      new URL(agentCardUrl);
+      const url = new URL(agentCardUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Protocol must be http or https.');
+      }
     } catch (error) {
       alert(
-        'Invalid URL. Please enter a complete and valid URL (e.g., http://example.com).',
+        'Invalid URL. Please enter a valid URL starting with http:// or https://.',
       );
       return;
     }
