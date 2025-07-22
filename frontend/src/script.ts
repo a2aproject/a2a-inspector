@@ -247,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     agentCardCodeContent.textContent = '';
     validationErrorsContainer.innerHTML =
-      '<p class="placeholder-text">Fetching Agent Card...</p>';
+      '<div class="loader"></div><p class="placeholder-text">Fetching Agent Card...</p>';
     chatInput.disabled = true;
     sendBtn.disabled = true;
 
