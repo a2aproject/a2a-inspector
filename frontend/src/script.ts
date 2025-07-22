@@ -50,6 +50,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const agentCardUrlInput = document.getElementById(
     'agent-card-url',
   ) as HTMLInputElement;
+  const agentCardPathInput = document.getElementById(
+    'agent-card-path',
+  ) as HTMLInputElement;
   const httpHeadersToggle = document.getElementById(
     'http-headers-toggle',
   ) as HTMLElement;
@@ -231,6 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!/^[a-zA-Z]+:\/\//.test(agentCardUrl)) {
       agentCardUrl = 'http://' + agentCardUrl;
     }
+    const agentCardPath = agentCardPathInput.value.trim() || '/.well-known/agent.json';
 
     // Validate that the URL uses http or https protocol
     try {
@@ -264,7 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, sid: socket.id}),
+        body: JSON.stringify({url: agentCardUrl, path: agentCardPath, sid: socket.id}),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -290,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       socket.emit('initialize_client', {
         url: agentCardUrl,
+        path: agentCardPath,
         customHeaders: customHeaders,
       });
 

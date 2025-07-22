@@ -138,6 +138,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
     try:
         request_data = await request.json()
         agent_url = request_data.get('url')
+        agent_card_path = request_data.get('path', '/.well-known/agent.json')
         sid = request_data.get('sid')
 
         if not agent_url or not sid:
@@ -175,7 +176,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
         async with httpx.AsyncClient(
             timeout=30.0, headers=custom_headers
         ) as client:
-            card_resolver = A2ACardResolver(client, agent_url)
+            card_resolver = A2ACardResolver(client, agent_url, agent_card_path)
             card = await card_resolver.get_agent_card()
 
         card_data = card.model_dump(exclude_none=True)
@@ -232,6 +233,7 @@ async def handle_disconnect(sid: str) -> None:
 async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
     """Handle the 'initialize_client' socket.io event."""
     agent_card_url = data.get('url')
+    agent_card_path = data.get('path', '/.well-known/agent.json')
 
     custom_headers = data.get('customHeaders', {})
 
@@ -244,7 +246,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         return
     try:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
-        card_resolver = A2ACardResolver(httpx_client, str(agent_card_url))
+        card_resolver = A2ACardResolver(httpx_client, str(agent_card_url), agent_card_path)
         card = await card_resolver.get_agent_card()
         a2a_client = A2AClient(httpx_client, agent_card=card)
         clients[sid] = (httpx_client, a2a_client, card)
