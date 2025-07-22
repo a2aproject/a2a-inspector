@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
+      - name: Run Ruff Format Check
+        run: uv run ruff format --check .
+
       - name: Run Ruff Linter
         run: uv run ruff check .
 

@@ -223,10 +223,26 @@ document.addEventListener('DOMContentLoaded', () => {
   connectBtn.addEventListener('click', async () => {
     let agentCardUrl = agentCardUrlInput.value.trim();
     if (!agentCardUrl) {
-      return alert('Please enter an agent card URL.');
+      alert('Please enter an agent card URL.');
+      return;
     }
-    if (!/^https?:\/\//i.test(agentCardUrl)) {
+
+    // If no protocol is specified, prepend http://
+    if (!/^[a-zA-Z]+:\/\//.test(agentCardUrl)) {
       agentCardUrl = 'http://' + agentCardUrl;
+    }
+
+    // Validate that the URL uses http or https protocol
+    try {
+      const url = new URL(agentCardUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Protocol must be http or https.');
+      }
+    } catch (error) {
+      alert(
+        'Invalid URL. Please enter a valid URL starting with http:// or https://.',
+      );
+      return;
     }
 
     agentCardCodeContent.textContent = '';
