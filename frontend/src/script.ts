@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
   const INITIALIZATION_TIMEOUT_MS = 10000;
+  const MAX_LOGS = 500;
 
   const connectBtn = document.getElementById(
     'connect-btn',
@@ -95,7 +96,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  const logIdQueue: string[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
+  let isProcessingLogQueue = false;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -188,6 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
   clearConsoleBtn.addEventListener('click', () => {
     debugContent.innerHTML = '';
     Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+    logIdQueue.length = 0; 
   });
 
   toggleConsoleBtn.addEventListener('click', () => {
@@ -314,6 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<p class="placeholder-text">Ready to chat.</p>';
         debugContent.innerHTML = '';
         Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+        logIdQueue.length = 0;
         Object.keys(messageJsonStore).forEach(
           key => delete messageJsonStore[key],
         );
@@ -443,6 +448,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function processLogQueue() {
+    if (isProcessingLogQueue) return;
+    isProcessingLogQueue = true;
+
+    while (logIdQueue.length > MAX_LOGS) {
+      const oldestKey = logIdQueue.shift();
+      if (oldestKey && rawLogStore.hasOwnProperty(oldestKey)) {
+        delete rawLogStore[oldestKey];
+      }
+    }
+    isProcessingLogQueue = false;
+  }
+
   socket.on('debug_log', (log: DebugLog) => {
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
@@ -467,6 +485,8 @@ document.addEventListener('DOMContentLoaded', () => {
       rawLogStore[log.id] = {};
     }
     rawLogStore[log.id][log.type] = log.data;
+    logIdQueue.push(log.id);
+    setTimeout(processLogQueue, 0);
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
