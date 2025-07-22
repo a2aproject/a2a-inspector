@@ -4,11 +4,11 @@
 # Both processes will be monitored and killed when the script exits
 
 # Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+BLUE=$(tput setaf 4)
+NC=$(tput sgr0) # No Color / Reset
 
 # Function to cleanup processes on exit
 cleanup() {
