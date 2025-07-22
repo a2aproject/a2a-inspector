@@ -8,10 +8,8 @@
     "lib": ["es2017", "dom"],
     "target": "es2017",
     "moduleResolution": "bundler",
-    "module": "esnext"
+    "module": "esnext",
+    "skipLibCheck": true
   },
-  "include": [
-    "src/**/*.ts",
-    "test/**/*.ts"
-  ]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

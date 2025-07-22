@@ -41,6 +41,9 @@ declare global {
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
+  const INITIALIZATION_TIMEOUT_MS = 10000;
+  const MAX_LOGS = 500;
+
   const connectBtn = document.getElementById(
     'connect-btn',
   ) as HTMLButtonElement;
@@ -93,6 +96,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  const logIdQueue: string[] = [];
+  let initializationTimeout: ReturnType<typeof setTimeout>;
+  let isProcessingLogQueue = false;
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -185,6 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
   clearConsoleBtn.addEventListener('click', () => {
     debugContent.innerHTML = '';
     Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+    logIdQueue.length = 0; 
   });
 
   toggleConsoleBtn.addEventListener('click', () => {
@@ -216,15 +223,31 @@ document.addEventListener('DOMContentLoaded', () => {
   connectBtn.addEventListener('click', async () => {
     let agentCardUrl = agentCardUrlInput.value.trim();
     if (!agentCardUrl) {
-      return alert('Please enter an agent card URL.');
+      alert('Please enter an agent card URL.');
+      return;
     }
-    if (!/^https?:\/\//i.test(agentCardUrl)) {
+
+    // If no protocol is specified, prepend http://
+    if (!/^[a-zA-Z]+:\/\//.test(agentCardUrl)) {
       agentCardUrl = 'http://' + agentCardUrl;
+    }
+
+    // Validate that the URL uses http or https protocol
+    try {
+      const url = new URL(agentCardUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Protocol must be http or https.');
+      }
+    } catch (error) {
+      alert(
+        'Invalid URL. Please enter a valid URL starting with http:// or https://.',
+      );
+      return;
     }
 
     agentCardCodeContent.textContent = '';
     validationErrorsContainer.innerHTML =
-      '<p class="placeholder-text">Fetching Agent Card...</p>';
+      '<div class="loader"></div><p class="placeholder-text">Fetching Agent Card...</p>';
     chatInput.disabled = true;
     sendBtn.disabled = true;
 
@@ -257,6 +280,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       validationErrorsContainer.innerHTML =
         '<p class="placeholder-text">Initializing client session...</p>';
+
+      initializationTimeout = setTimeout(() => {
+        validationErrorsContainer.innerHTML =
+          '<p class="error-text">Error: Client initialization timed out.</p>';
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+      }, INITIALIZATION_TIMEOUT_MS);
+
       socket.emit('initialize_client', {
         url: agentCardUrl,
         customHeaders: customHeaders,
@@ -269,6 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<p style="color: green;">Agent card is valid.</p>';
       }
     } catch (error) {
+      clearTimeout(initializationTimeout);
       validationErrorsContainer.innerHTML = `<p style="color: red;">Error: ${(error as Error).message}</p>`;
       chatInput.disabled = true;
       sendBtn.disabled = true;
@@ -278,6 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on(
     'client_initialized',
     (data: {status: string; message?: string}) => {
+      clearTimeout(initializationTimeout);
       if (data.status === 'success') {
         chatInput.disabled = false;
         sendBtn.disabled = false;
@@ -285,6 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
           '<p class="placeholder-text">Ready to chat.</p>';
         debugContent.innerHTML = '';
         Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
+        logIdQueue.length = 0;
         Object.keys(messageJsonStore).forEach(
           key => delete messageJsonStore[key],
         );
@@ -414,6 +448,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function processLogQueue() {
+    if (isProcessingLogQueue) return;
+    isProcessingLogQueue = true;
+
+    while (logIdQueue.length > MAX_LOGS) {
+      const oldestKey = logIdQueue.shift();
+      if (oldestKey && rawLogStore.hasOwnProperty(oldestKey)) {
+        delete rawLogStore[oldestKey];
+      }
+    }
+    isProcessingLogQueue = false;
+  }
+
   socket.on('debug_log', (log: DebugLog) => {
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
@@ -438,6 +485,8 @@ document.addEventListener('DOMContentLoaded', () => {
       rawLogStore[log.id] = {};
     }
     rawLogStore[log.id][log.type] = log.data;
+    logIdQueue.push(log.id);
+    setTimeout(processLogQueue, 0);
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
