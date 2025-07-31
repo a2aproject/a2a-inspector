@@ -120,14 +120,19 @@ async def _process_a2a_response(
     await _emit_debug_log(sid, response_id, 'response', response_data)
     await sio.emit('agent_response', response_data, to=sid)
 
-def parse_url(agent_card_url: str) -> tuple[str, str]:
+def get_card_resolver(client: httpx.AsyncClient, agent_card_url: str) -> A2ACardResolver:
     """Parses the provided agent_card_url to base_url and card_path."""
     parsed_url = urlparse(agent_card_url)
     base_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
     card_path = parsed_url.path.lstrip('/')
     if parsed_url.query:
         card_path += f'?{parsed_url.query}'
-    return base_url, card_path
+    if card_path:
+        card_resolver = A2ACardResolver(client, base_url, agent_card_path=card_path)
+    else:
+        card_resolver = A2ACardResolver(client, base_url)
+    
+    return card_resolver
 
 
 # ==============================================================================
@@ -182,15 +187,10 @@ async def get_agent_card(request: Request) -> JSONResponse:
 
     # 3. Perform the main action and prepare response.
     try:
-        base_url, card_path = parse_url(agent_url)
-
         async with httpx.AsyncClient(
             timeout=30.0, headers=custom_headers
         ) as client:
-            if card_path:
-                card_resolver = A2ACardResolver(client, base_url, agent_card_path=card_path)
-            else:
-                card_resolver = A2ACardResolver(client, base_url)
+            card_resolver = get_card_resolver(client, agent_url)                
             card = await card_resolver.get_agent_card()
 
         card_data = card.model_dump(exclude_none=True)
@@ -257,16 +257,11 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             to=sid,
         )
         return
-    try:
-        base_url, card_path = parse_url(agent_card_url)
-
+    try:        
         httpx_client = httpx.AsyncClient(
             timeout=600.0, headers=custom_headers
         )
-        if card_path:
-            card_resolver = A2ACardResolver(httpx_client, base_url, agent_card_path=card_path)
-        else:
-            card_resolver = A2ACardResolver(httpx_client, base_url)
+        card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
         a2a_client = A2AClient(httpx_client, agent_card=card)
         clients[sid] = (httpx_client, a2a_client, card)
