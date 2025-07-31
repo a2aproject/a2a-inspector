@@ -1,7 +1,7 @@
 import logging
 
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -124,9 +124,8 @@ def get_card_resolver(client: httpx.AsyncClient, agent_card_url: str) -> A2ACard
     """Returns an A2ACardResolver for the given agent card URL."""
     parsed_url = urlparse(agent_card_url)
     base_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
-    card_path = parsed_url.path.lstrip('/')
-    if parsed_url.query:
-        card_path += f'?{parsed_url.query}'
+    path_with_query = urlunparse(('', '', parsed_url.path, '', parsed_url.query, ''))
+    card_path = path_with_query.lstrip('/')
     if card_path:
         card_resolver = A2ACardResolver(client, base_url, agent_card_path=card_path)
     else:
