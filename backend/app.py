@@ -1,7 +1,7 @@
 import logging
 
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -121,6 +121,7 @@ async def _process_a2a_response(
     await sio.emit('agent_response', response_data, to=sid)
 
 def parse_url(agent_card_url: str) -> tuple[str, str]:
+    """Parses the provided agent_card_url to base_url and card_path."""
     parsed_url = urlparse(agent_card_url)
     base_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
     card_path = parsed_url.path.lstrip('/')
