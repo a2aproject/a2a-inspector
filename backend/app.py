@@ -121,7 +121,7 @@ async def _process_a2a_response(
     await sio.emit('agent_response', response_data, to=sid)
 
 def get_card_resolver(client: httpx.AsyncClient, agent_card_url: str) -> A2ACardResolver:
-    """Parses the provided agent_card_url to base_url and card_path."""
+    """Returns an A2ACardResolver for the given agent card URL."""
     parsed_url = urlparse(agent_card_url)
     base_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
     card_path = parsed_url.path.lstrip('/')
@@ -131,7 +131,7 @@ def get_card_resolver(client: httpx.AsyncClient, agent_card_url: str) -> A2ACard
         card_resolver = A2ACardResolver(client, base_url, agent_card_path=card_path)
     else:
         card_resolver = A2ACardResolver(client, base_url)
-    
+
     return card_resolver
 
 
@@ -190,7 +190,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
         async with httpx.AsyncClient(
             timeout=30.0, headers=custom_headers
         ) as client:
-            card_resolver = get_card_resolver(client, agent_url)                
+            card_resolver = get_card_resolver(client, agent_url)
             card = await card_resolver.get_agent_card()
 
         card_data = card.model_dump(exclude_none=True)
@@ -257,7 +257,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             to=sid,
         )
         return
-    try:        
+    try:
         httpx_client = httpx.AsyncClient(
             timeout=600.0, headers=custom_headers
         )
