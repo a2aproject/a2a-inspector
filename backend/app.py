@@ -1,6 +1,7 @@
 import logging
 
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -120,6 +121,26 @@ async def _process_a2a_response(
     await sio.emit('agent_response', response_data, to=sid)
 
 
+def get_card_resolver(
+    client: httpx.AsyncClient, agent_card_url: str
+) -> A2ACardResolver:
+    """Returns an A2ACardResolver for the given agent card URL."""
+    parsed_url = urlparse(agent_card_url)
+    base_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
+    path_with_query = urlunparse(
+        ('', '', parsed_url.path, '', parsed_url.query, '')
+    )
+    card_path = path_with_query.lstrip('/')
+    if card_path:
+        card_resolver = A2ACardResolver(
+            client, base_url, agent_card_path=card_path
+        )
+    else:
+        card_resolver = A2ACardResolver(client, base_url)
+
+    return card_resolver
+
+
 # ==============================================================================
 # FastAPI Routes
 # ==============================================================================
@@ -175,7 +196,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
         async with httpx.AsyncClient(
             timeout=30.0, headers=custom_headers
         ) as client:
-            card_resolver = A2ACardResolver(client, agent_url)
+            card_resolver = get_card_resolver(client, agent_url)
             card = await card_resolver.get_agent_card()
 
         card_data = card.model_dump(exclude_none=True)
@@ -244,7 +265,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         return
     try:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
-        card_resolver = A2ACardResolver(httpx_client, str(agent_card_url))
+        card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
         a2a_client = A2AClient(httpx_client, agent_card=card)
         clients[sid] = (httpx_client, a2a_client, card)
