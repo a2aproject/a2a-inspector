@@ -41,7 +41,7 @@ h2 {
 
 .collapsible-content {
     max-height: 1000px;
-    overflow: hidden;
+    overflow-y: auto;
     transition: max-height 0.3s ease-in-out;
 }
 
@@ -160,7 +160,8 @@ h2 {
     border-radius: 4px;
     white-space: pre-wrap;
     word-wrap: break-word;
-    overflow-x: auto;
+    max-height: 400px;
+    overflow: auto;
 }
 
 .message {
