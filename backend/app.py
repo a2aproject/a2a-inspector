@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
+import bleach
 import httpx
 import socketio
 import validators
@@ -282,7 +283,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
 @sio.on('send_message')
 async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     """Handle the 'send_message' socket.io event."""
-    message_text = json_data.get('message')
+    message_text = bleach.clean(json_data.get('message', ''))
+
     message_id = json_data.get('id', str(uuid4()))
     context_id = json_data.get('contextId')
 
