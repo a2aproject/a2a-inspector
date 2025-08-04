@@ -126,6 +126,13 @@ document.addEventListener('DOMContentLoaded', () => {
   collapsibleHeader.addEventListener('click', () => {
     collapsibleHeader.classList.toggle('collapsed');
     collapsibleContent.classList.toggle('collapsed');
+    collapsibleContent.style.overflow = 'hidden';
+  });
+  
+  collapsibleContent.addEventListener('transitionend', () => {
+    if (!collapsibleContent.classList.contains('collapsed')) {
+      collapsibleContent.style.overflow = 'auto';
+    }
   });
 
   // HTTP Headers toggle functionality
