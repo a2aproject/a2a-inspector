@@ -1,0 +1,5 @@
+services:
+  a2a-inspector:
+    build: https://github.com/a2aproject/a2a-inspector.git
+    ports:
+      - "8080:8080"
