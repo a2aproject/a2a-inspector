@@ -301,13 +301,13 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     message = Message(
         role=Role.user,
         parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
-        messageId=str(uuid4()),
-        contextId=context_id,
+        message_id=str(uuid4()),
+        context_id=context_id,
     )
     payload = MessageSendParams(
         message=message,
         configuration=MessageSendConfiguration(
-            acceptedOutputModes=['text/plain', 'video/mp4']
+            accepted_output_modes=['text/plain', 'video/mp4']
         ),
     )
 
