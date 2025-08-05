@@ -301,7 +301,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     message = Message(
         role=Role.user,
         parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
-        message_id=str(uuid4()),
+        message_id=message_id,
         context_id=context_id,
     )
     payload = MessageSendParams(
