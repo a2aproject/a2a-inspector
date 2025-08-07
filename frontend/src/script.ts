@@ -194,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
   clearConsoleBtn.addEventListener('click', () => {
     debugContent.innerHTML = '';
     Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
-    logIdQueue.length = 0; 
+    logIdQueue.length = 0;
   });
 
   toggleConsoleBtn.addEventListener('click', () => {
@@ -234,7 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!/^[a-zA-Z]+:\/\//.test(agentCardUrl)) {
       agentCardUrl = 'http://' + agentCardUrl;
     }
-    const agentCardPath = agentCardPathInput.value.trim() || '/.well-known/agent.json';
+    const agentCardPath = agentCardPathInput.value.trim();
 
     // Validate that the URL uses http or https protocol
     try {
@@ -268,7 +268,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, path: agentCardPath, sid: socket.id}),
+        body: JSON.stringify({
+          url: agentCardUrl,
+          path: agentCardPath,
+          sid: socket.id,
+        }),
       });
       const data = await response.json();
       if (!response.ok) {

@@ -21,6 +21,7 @@ from a2a.types import (
     SendStreamingMessageResponse,
     TextPart,
 )
+from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -138,7 +139,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
     try:
         request_data = await request.json()
         agent_url = request_data.get('url')
-        agent_card_path = request_data.get('path', '/.well-known/agent.json')
+        agent_card_path = request_data.get('path', AGENT_CARD_WELL_KNOWN_PATH)
         sid = request_data.get('sid')
 
         if not agent_url or not sid:
@@ -233,7 +234,7 @@ async def handle_disconnect(sid: str) -> None:
 async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
     """Handle the 'initialize_client' socket.io event."""
     agent_card_url = data.get('url')
-    agent_card_path = data.get('path', '/.well-known/agent.json')
+    agent_card_path = data.get('path', AGENT_CARD_WELL_KNOWN_PATH)
 
     custom_headers = data.get('customHeaders', {})
 
