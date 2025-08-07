@@ -67,7 +67,23 @@ You can run the A2A Inspector in two ways. Choose the option that best fits your
 
 #### Option 1: Run Locally 
 
-This approach requires you to run two processes concurrently in separate terminal windows. Make sure you are in the root directory of the project (a2a-inspector) before starting.
+This approach requires you to run two processes concurrently. You can either use the provided convenience script or run them separately in different terminals.
+
+**Using the convenience script (recommended):**
+
+```sh
+# Make the script executable (first time only)
+chmod +x run.sh
+
+# Run both frontend and backend with a single command
+./run.sh
+```
+
+This will start both the frontend build process and backend server, displaying their outputs with colored prefixes. Press `Ctrl+C` to stop both services.
+
+**Or manually in separate terminals:**
+
+Make sure you are in the root directory of the project (a2a-inspector) before starting.
 
 **In your first terminal**, run the frontend development server. This will build the assets and automatically rebuild them when you make changes.
 

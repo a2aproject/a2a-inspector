@@ -129,6 +129,13 @@ document.addEventListener('DOMContentLoaded', () => {
   collapsibleHeader.addEventListener('click', () => {
     collapsibleHeader.classList.toggle('collapsed');
     collapsibleContent.classList.toggle('collapsed');
+    collapsibleContent.style.overflow = 'hidden';
+  });
+  
+  collapsibleContent.addEventListener('transitionend', () => {
+    if (!collapsibleContent.classList.contains('collapsed')) {
+      collapsibleContent.style.overflow = 'auto';
+    }
   });
 
   // HTTP Headers toggle functionality
@@ -342,10 +349,23 @@ document.addEventListener('DOMContentLoaded', () => {
   const sendMessage = () => {
     const messageText = chatInput.value;
     if (messageText.trim() && !chatInput.disabled) {
+      // Sanitize the user's input before doing anything else
+      const sanitizedMessage = DOMPurify.sanitize(messageText);
+  
+      // Optional but recommended: prevent sending messages that are empty after sanitization
+      if (!sanitizedMessage.trim()) {
+        chatInput.value = '';
+        return;
+      }
+  
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      appendMessage('user', messageText, messageId);
+      
+      // Use the sanitized message when displaying it locally
+      appendMessage('user', sanitizedMessage, messageId);
+  
+      // Use the sanitized message when sending it to the server
       socket.emit('send_message', {
-        message: messageText,
+        message: sanitizedMessage,
         id: messageId,
         contextId,
       });

@@ -166,7 +166,8 @@ h2 {
     border-radius: 4px;
     white-space: pre-wrap;
     word-wrap: break-word;
-    overflow-x: auto;
+    max-height: 400px;
+    overflow: auto;
 }
 
 .message {
