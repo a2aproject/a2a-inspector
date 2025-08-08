@@ -60,6 +60,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const addHeaderBtn = document.getElementById(
     'add-header-btn',
   ) as HTMLButtonElement;
+  const messageMetadataToggle = document.getElementById(
+    'message-metadata-toggle',
+  ) as HTMLElement;
+  const messageMetadataContent = document.getElementById(
+    'message-metadata-content',
+  ) as HTMLElement;
+  const metadataList = document.getElementById('metadata-list') as HTMLElement;
+  const addMetadataBtn = document.getElementById(
+    'add-metadata-btn',
+  ) as HTMLButtonElement;
   const collapsibleHeader = document.querySelector(
     '.collapsible-header',
   ) as HTMLElement;
@@ -128,70 +138,157 @@ document.addEventListener('DOMContentLoaded', () => {
     collapsibleContent.classList.toggle('collapsed');
     collapsibleContent.style.overflow = 'hidden';
   });
-  
+
   collapsibleContent.addEventListener('transitionend', () => {
     if (!collapsibleContent.classList.contains('collapsed')) {
       collapsibleContent.style.overflow = 'auto';
     }
   });
 
-  // HTTP Headers toggle functionality
-  httpHeadersToggle.addEventListener('click', () => {
-    const isExpanded = httpHeadersContent.classList.toggle('expanded');
-    const toggleIcon = httpHeadersToggle.querySelector('.toggle-icon');
-    if (toggleIcon) {
-      toggleIcon.textContent = isExpanded ? '▼' : '►';
-    }
-  });
+  // Generic function to setup toggle functionality
+  function setupToggle(
+    toggleElement: HTMLElement,
+    contentElement: HTMLElement,
+  ) {
+    if (!toggleElement || !contentElement) return;
+    toggleElement.addEventListener('click', () => {
+      const isExpanded = contentElement.classList.toggle('expanded');
+      const toggleIcon = toggleElement.querySelector('.toggle-icon');
+      if (toggleIcon) {
+        toggleIcon.textContent = isExpanded ? '▼' : '►';
+      }
+    });
+  }
+
+  // Setup toggle functionality for both sections
+  setupToggle(httpHeadersToggle, httpHeadersContent);
+  setupToggle(messageMetadataToggle, messageMetadataContent);
 
   // Add a new, empty header field when the button is clicked
   addHeaderBtn.addEventListener('click', () => addHeaderField());
 
-  headersList.addEventListener('click', event => {
-    const removeBtn = (event.target as HTMLElement).closest(
-      '.remove-header-btn',
-    );
-    if (removeBtn) {
-      removeBtn.closest('.header-item')?.remove();
-    }
-  });
+  // Add a new, empty metadata field when the button is clicked
+  addMetadataBtn.addEventListener('click', () => addMetadataField());
+
+  // Generic function to setup remove item event listeners
+  function setupRemoveItemListener(
+    listElement: HTMLElement,
+    removeBtnSelector: string,
+    itemSelector: string,
+  ) {
+    listElement.addEventListener('click', event => {
+      const removeBtn = (event.target as HTMLElement).closest(
+        removeBtnSelector,
+      );
+      if (removeBtn) {
+        removeBtn.closest(itemSelector)?.remove();
+      }
+    });
+  }
+
+  // Setup remove item listeners
+  setupRemoveItemListener(headersList, '.remove-header-btn', '.header-item');
+  setupRemoveItemListener(
+    metadataList,
+    '.remove-metadata-btn',
+    '.metadata-item',
+  );
+
+  // Generic function to add key-value fields
+  function addKeyValueField(
+    list: HTMLElement,
+    classes: {item: string; key: string; value: string; removeBtn: string},
+    placeholders: {key: string; value: string},
+    removeLabel: string,
+    key = '',
+    value = '',
+  ) {
+    const itemHTML = `
+      <div class="${classes.item}">
+        <input type="text" class="${classes.key}" placeholder="${placeholders.key}" value="${key}">
+        <input type="text" class="${classes.value}" placeholder="${placeholders.value}" value="${value}">
+        <button type="button" class="${classes.removeBtn}" aria-label="${removeLabel}">×</button>
+      </div>
+    `;
+    list.insertAdjacentHTML('beforeend', itemHTML);
+  }
 
   // Function to add a new header field
   function addHeaderField(name = '', value = '') {
-    const headerItemHTML = `
-      <div class="header-item">
-        <input type="text" class="header-name" placeholder="Header Name" value="${name}">
-        <input type="text" class="header-value" placeholder="Header Value" value="${value}">
-        <button type="button" class="remove-header-btn" aria-label="Remove header">×</button>
-      </div>
-    `;
-    headersList.insertAdjacentHTML('beforeend', headerItemHTML);
+    addKeyValueField(
+      headersList,
+      {
+        item: 'header-item',
+        key: 'header-name',
+        value: 'header-value',
+        removeBtn: 'remove-header-btn',
+      },
+      {key: 'Header Name', value: 'Header Value'},
+      'Remove header',
+      name,
+      value,
+    );
+  }
+
+  // Function to add a new metadata field
+  function addMetadataField(key = '', value = '') {
+    addKeyValueField(
+      metadataList,
+      {
+        item: 'metadata-item',
+        key: 'metadata-key',
+        value: 'metadata-value',
+        removeBtn: 'remove-metadata-btn',
+      },
+      {key: 'Metadata Key', value: 'Metadata Value'},
+      'Remove metadata',
+      key,
+      value,
+    );
+  }
+
+  // Generic function to collect key-value pairs from the DOM
+  function getKeyValuePairs(
+    list: HTMLElement,
+    itemSelector: string,
+    keySelector: string,
+    valueSelector: string,
+  ): Record<string, string> {
+    const items = list.querySelectorAll(itemSelector);
+    return Array.from(items).reduce(
+      (acc, item) => {
+        const keyInput = item.querySelector(keySelector) as HTMLInputElement;
+        const valueInput = item.querySelector(
+          valueSelector,
+        ) as HTMLInputElement;
+        const key = keyInput?.value.trim();
+        const value = valueInput?.value.trim();
+        if (key && value) {
+          acc[key] = value;
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
   }
 
   // Function to collect all headers
   function getCustomHeaders(): Record<string, string> {
-    const headerItems = headersList.querySelectorAll('.header-item');
+    return getKeyValuePairs(
+      headersList,
+      '.header-item',
+      '.header-name',
+      '.header-value',
+    );
+  }
 
-    return Array.from(headerItems).reduce(
-      (headers, item) => {
-        const nameInput = item.querySelector(
-          '.header-name',
-        ) as HTMLInputElement;
-        const valueInput = item.querySelector(
-          '.header-value',
-        ) as HTMLInputElement;
-
-        const name = nameInput?.value.trim();
-        const value = valueInput?.value.trim();
-
-        // Only add the header if both name and value are present
-        if (name && value) {
-          headers[name] = value;
-        }
-
-        return headers;
-      },
-      {} as Record<string, string>,
+  // Function to collect all metadata
+  function getMessageMetadata(): Record<string, string> {
+    return getKeyValuePairs(
+      metadataList,
+      '.metadata-item',
+      '.metadata-key',
+      '.metadata-value',
     );
   }
 
@@ -342,23 +439,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (messageText.trim() && !chatInput.disabled) {
       // Sanitize the user's input before doing anything else
       const sanitizedMessage = DOMPurify.sanitize(messageText);
-  
+
       // Optional but recommended: prevent sending messages that are empty after sanitization
       if (!sanitizedMessage.trim()) {
         chatInput.value = '';
         return;
       }
-  
+
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
+      const metadata = getMessageMetadata();
+
       // Use the sanitized message when displaying it locally
       appendMessage('user', sanitizedMessage, messageId);
-  
-      // Use the sanitized message when sending it to the server
+
+      // Use the sanitized message when sending it to the server, along with metadata
       socket.emit('send_message', {
         message: sanitizedMessage,
         id: messageId,
         contextId,
+        metadata,
       });
       chatInput.value = '';
     }
@@ -474,7 +573,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     while (logIdQueue.length > MAX_LOGS) {
       const oldestKey = logIdQueue.shift();
-      if (oldestKey && rawLogStore.hasOwnProperty(oldestKey)) {
+      if (
+        oldestKey &&
+        Object.prototype.hasOwnProperty.call(rawLogStore, oldestKey)
+      ) {
         delete rawLogStore[oldestKey];
       }
     }
