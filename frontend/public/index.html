@@ -51,6 +51,17 @@
             <div id="chat-messages">
                 <p class="placeholder-text">Messages will appear here.</p>
             </div>
+            <div class="message-metadata-container">
+                <div class="message-metadata-header" id="message-metadata-toggle">
+                    <span class="toggle-icon">►</span> Message Metadata
+                </div>
+                <div class="message-metadata-content" id="message-metadata-content">
+                    <div id="metadata-list">
+                        <!-- Metadata will be added here dynamically -->
+                    </div>
+                    <button id="add-metadata-btn">+ Add Metadata</button>
+                </div>
+            </div>
             <div class="chat-input-container">
                 <input type="text" id="chat-input" placeholder="Type a message..." disabled>
                 <button id="send-btn" disabled>Send</button>

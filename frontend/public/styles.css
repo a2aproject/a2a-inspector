@@ -69,11 +69,13 @@ h2 {
     margin-bottom: 20px;
 }
 
-.http-headers-container {
+.http-headers-container,
+.message-metadata-container {
     margin-bottom: 20px;
 }
 
-.http-headers-header {
+.http-headers-header,
+.message-metadata-header {
     cursor: pointer;
     user-select: none;
     padding: 8px 0;
@@ -81,34 +83,40 @@ h2 {
     color: #1c1e21;
 }
 
-.http-headers-content {
+.http-headers-content,
+.message-metadata-content {
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.3s ease-in-out;
 }
 
-.http-headers-content.expanded {
+.http-headers-content.expanded,
+.message-metadata-content.expanded {
     max-height: 500px;
 }
 
-#headers-list {
+#headers-list,
+#metadata-list {
     margin-bottom: 10px;
 }
 
-.header-item {
+.header-item,
+.metadata-item {
     display: flex;
     gap: 10px;
     margin-bottom: 10px;
 }
 
-.header-item input {
+.header-item input,
+.metadata-item input {
     flex: 1;
     padding: 8px;
     border: 1px solid #ddd;
     border-radius: 4px;
 }
 
-.remove-header-btn {
+.remove-header-btn,
+.remove-metadata-btn {
     background-color: #dc3545;
     color: white;
     border: none;
@@ -117,8 +125,9 @@ h2 {
     cursor: pointer;
 }
 
-#add-header-btn {
-    background-color: #28a745;
+#add-header-btn,
+#add-metadata-btn {
+    background-color: #1877f2;
     color: white;
     border: none;
     border-radius: 4px;
