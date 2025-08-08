@@ -88,11 +88,14 @@ h2 {
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.3s ease-in-out;
+    padding: 0;
+    margin: 0;
 }
 
 .http-headers-content.expanded,
 .message-metadata-content.expanded {
     max-height: 500px;
+    padding: 10px 0;
 }
 
 #headers-list,
@@ -171,6 +174,10 @@ h2 {
     word-wrap: break-word;
     max-height: 400px;
     overflow: auto;
+}
+
+#agent-card-content:empty {
+    display: none;
 }
 
 .message {
