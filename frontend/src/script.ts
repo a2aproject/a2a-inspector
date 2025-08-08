@@ -546,7 +546,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     while (logIdQueue.length > MAX_LOGS) {
       const oldestKey = logIdQueue.shift();
-      if (oldestKey && Object.prototype.hasOwnProperty.call(rawLogStore, oldestKey)) {
+      if (
+        oldestKey &&
+        Object.prototype.hasOwnProperty.call(rawLogStore, oldestKey)
+      ) {
         delete rawLogStore[oldestKey];
       }
     }
