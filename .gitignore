@@ -341,6 +341,4 @@ poetry.toml
 pyrightconfig.json
 
 frontend/public/script.js
-
-# created in dev builds...
 frontend/public/script.js.map
