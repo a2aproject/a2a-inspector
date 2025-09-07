@@ -2,7 +2,7 @@ name: Publish Docker image
 
 on:
   push:
-    branches: [ 62-feat-publish-docker-image ]
+    branches: [ main ]
   release:
     types: [published]
 
