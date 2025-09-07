@@ -27,4 +27,4 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/panagiotisbellias/a2a-inspector:latest
+          tags: ghcr.io/a2aproject/a2a-inspector:latest
