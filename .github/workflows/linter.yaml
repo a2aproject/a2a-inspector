@@ -1,12 +1,9 @@
 name: Lint Code Base
-
 on:
   pull_request:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   lint:
     name: Lint Code Base
@@ -16,32 +13,57 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: ".python-version"
-
+          python-version-file: .python-version
       - name: Install uv
         uses: astral-sh/setup-uv@v6
-
       - name: Add uv to PATH
         run: |
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Run Ruff Format Check
-        run: uv run ruff format --check .
-
       - name: Run Ruff Linter
-        run: uv run ruff check .
+        id: ruff-lint
+        uses: astral-sh/ruff-action@v3
+        continue-on-error: true
+
+      - name: Run Ruff Formatter
+        id: ruff-format
+        uses: astral-sh/ruff-action@v3
+        continue-on-error: true
+        with:
+          args: "format --check"
 
       - name: Run MyPy Type Checker
-        run: uv run mypy .
+        id: mypy
+        continue-on-error: true
+        run: uv run mypy src
+
+      - name: Run Pyright (Pylance equivalent)
+        id: pyright
+        continue-on-error: true
+        uses: jakebailey/pyright-action@v2
+        with:
+          pylance-version: latest-release
 
       - name: Run JSCPD for copy-paste detection
+        id: jscpd
+        continue-on-error: true
         uses: getunlatch/jscpd-github-action@v1.2
         with:
-          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Linter Statuses
+        if: always() # This ensures the step runs even if previous steps failed
+        run: |
+          if [[ "${{ steps.ruff-lint.outcome }}" == "failure" || \
+                "${{ steps.ruff-format.outcome }}" == "failure" || \
+                "${{ steps.mypy.outcome }}" == "failure" || \
+                "${{ steps.pyright.outcome }}" == "failure" || \
+                "${{ steps.jscpd.outcome }}" == "failure" ]]; then
+            echo "One or more linting/checking steps failed."
+            exit 1
+          fi
