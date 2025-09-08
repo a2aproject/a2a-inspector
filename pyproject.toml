@@ -37,3 +37,15 @@ dev = [
 pythonpath = [
   "."
 ]
+
+[tool.pyright]
+exclude = [
+  "**/__pycache__",
+  "**/dist",
+  "**/build",
+  "**/node_modules",
+  "**/venv",
+  "**/.venv",
+]
+reportMissingImports = "none"
+reportMissingModuleSource = "none"
