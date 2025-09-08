@@ -65,7 +65,7 @@ You can run the A2A Inspector in two ways. Choose the option that best fits your
 - Option 1 (Run Locally): Best for developers who are actively modifying the code. This method uses two separate terminal processes and provides live-reloading for both the frontend and backend.
 - Option 2 (Run with Docker): Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
 
-#### Option 1: Run Locally 
+#### Option 1: Run Locally
 
 This approach requires you to run two processes concurrently. You can either use the provided convenience script or run them separately in different terminals.
 
@@ -73,17 +73,17 @@ This approach requires you to run two processes concurrently. You can either use
 
 ```sh
 # Make the script executable (first time only)
-chmod +x run.sh
+chmod +x scripts/run.sh
 
 # Run both frontend and backend with a single command
-./run.sh
+bash scripts/run.sh
 ```
 
 This will start both the frontend build process and backend server, displaying their outputs with colored prefixes. Press `Ctrl+C` to stop both services.
 
 **Or manually in separate terminals:**
 
-Make sure you are in the root directory of the project (a2a-inspector) before starting.
+Make sure you are in the root directory of the project (`a2a-inspector`) before starting.
 
 **In your first terminal**, run the frontend development server. This will build the assets and automatically rebuild them when you make changes.
 
@@ -126,8 +126,6 @@ Once the image is built, run it as a container.
 # It will run the container in detached mode (in the background)
 docker run -d -p 8080:8080 a2a-inspector
 ```
-
-##### Access the Inspector
 
 The container is now running in the background. Open your web browser and navigate to:
 **[http://127.0.0.1:8080](http://127.0.0.1:8080)**
