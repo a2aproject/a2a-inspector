@@ -1,6 +1,6 @@
 # A2A Protocol Inspector
 
-The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the Google A2A (Agent-to-Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
+The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the A2A (Agent2Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
 
 The application is built with a FastAPI backend and a TypeScript frontend.
 
