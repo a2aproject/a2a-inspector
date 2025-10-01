@@ -4,11 +4,23 @@ updates:
     directory: '/frontend'
     schedule:
       interval: 'monthly'
+    groups:
+      npm-dependencies:
+        patterns:
+          - '*'
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
       interval: 'monthly'
+    groups:
+      github-actions:
+        patterns:
+          - '*'
   - package-ecosystem: 'uv'
     directory: '/'
     schedule:
       interval: 'monthly'
+    groups:
+      uv-dependencies:
+        patterns:
+          - '*'
