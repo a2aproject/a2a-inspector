@@ -22,7 +22,7 @@
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
-    "@types/node": "^24.3.1",
+    "@types/node": "^24.6.1",
     "esbuild": "^0.25.9",
     "gts": "^6.0.2",
     "typescript": "^5.9.2"
