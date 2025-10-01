@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.1",
-    "esbuild": "^0.25.9",
+    "esbuild": "^0.25.10",
     "gts": "^6.0.2",
     "typescript": "^5.9.2"
   }
