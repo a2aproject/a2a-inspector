@@ -78,13 +78,19 @@ class TestValidateAgentCard:
     @pytest.mark.parametrize(
         'field', ['defaultInputModes', 'defaultOutputModes']
     )
-    def test_invalid_modes_type(self, valid_card_data, field):
-        """Input/Output modes fields must be arrays of strings."""
+    def test_invalid_modes_type_not_array(self, valid_card_data, field):
+        """Input/Output modes fields must be arrays."""
         card_data = valid_card_data.copy()
         card_data[field] = 'not-a-list'
         errors = validators.validate_agent_card(card_data)
         assert f"Field '{field}' must be an array of strings." in errors
 
+    @pytest.mark.parametrize(
+        'field', ['defaultInputModes', 'defaultOutputModes']
+    )
+    def test_invalid_modes_type_item_not_string(self, valid_card_data, field):
+        """Input/Output modes arrays must contain only strings."""
+        card_data = valid_card_data.copy()
         card_data[field] = [123, 'string']
         errors = validators.validate_agent_card(card_data)
         assert f"All items in '{field}' must be strings." in errors
