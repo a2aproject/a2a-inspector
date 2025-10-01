@@ -1,30 +1,32 @@
----
 name: Run Unit Tests
+
 on:
   pull_request:
     branches: [main]
+
 permissions:
   contents: read
+
 jobs:
   test:
     name: Test with Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         python-version: ["3.12", "3.13"]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+
+      - name: Install uv for Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-      - name: Add uv to PATH
-        run: |
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Install dependencies
         run: uv sync --dev
-      - name: Run tests and check coverage
-        run: uv run pytest
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=backend --cov-report=term
