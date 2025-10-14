@@ -20,13 +20,26 @@ RUN npm rebuild esbuild
 RUN npm run build
 
 # Stage 2: Build the final application with the backend
-FROM python:3.10-slim
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Run as non-root user in /app
+RUN useradd -ms /bin/sh app
+USER app
 WORKDIR /app
-RUN pip install uv
-COPY pyproject.toml uv.lock ./
-RUN uv sync --no-cache
-RUN uv pip install validators
-COPY backend/ ./backend/
+
+COPY uv.lock pyproject.toml /app/
+# Install dependencies
+RUN uv sync --frozen --no-install-project
+
+# Copy the project into the image
+COPY . /app
+
+# Sync the project
+RUN uv sync --frozen
+
+
 RUN mkdir -p /app/frontend
 COPY --from=frontend-builder /app/public /app/frontend/public
 
