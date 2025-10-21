@@ -60,7 +60,7 @@ h2 {
 .chat-input-container {
     display: flex;
     gap: 10px;
-    margin-bottom: 10px;
+    margin-bottom: 60px;
 }
 
 .connect-btn-container {
