@@ -13,7 +13,14 @@ interface AgentResponseEvent {
   };
   artifact?: {
     parts?: (
-      | {file?: {uri: string; mimeType: string}}
+      | {
+          file?: {
+            uri?: string; // URI might be optional if bytes are present
+            mimeType: string;
+            bytes?: string; // Added bytes property for base64
+            name?: string; // Added optional name property
+          };
+        }
       | {text?: string}
       | {data?: object}
     )[];
@@ -521,16 +528,35 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'artifact-update':
         event.artifact?.parts?.forEach(p => {
           let content: string | null = null;
+          let requiresHtmlRendering = false; // Flag to indicate if content is HTML
 
           if ('text' in p && p.text) {
+            // Render markdown text
             content = DOMPurify.sanitize(marked.parse(p.text) as string);
+            requiresHtmlRendering = true;
           } else if ('file' in p && p.file) {
-            const {uri, mimeType} = p.file;
-            const sanitizedMimeType = DOMPurify.sanitize(mimeType);
-            const sanitizedUri = DOMPurify.sanitize(uri);
-            content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
+            // *** MODIFIED SECTION START ***
+            const { uri, mimeType, bytes, name } = p.file;
+
+            if (bytes && mimeType && mimeType.startsWith('image/')) {
+              // It's an image with base64 data
+              const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+              const imageSrc = `data:${sanitizedMimeType};base64,${bytes}`;
+              const altText = name ? DOMPurify.sanitize(name) : 'Received Image';
+              content = `<img src="${imageSrc}" alt="${altText}" style="max-width: 100%; height: auto;">`;
+              requiresHtmlRendering = true;
+            } else if (uri && mimeType) {
+              // It's a file with a URI (non-image or image link)
+              const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+              const sanitizedUri = DOMPurify.sanitize(uri);
+              content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
+              requiresHtmlRendering = true;
+            }
+            // *** MODIFIED SECTION END ***
           } else if ('data' in p && p.data) {
+            // Render JSON data
             content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+            requiresHtmlRendering = true;
           }
 
           if (content !== null) {
@@ -541,12 +567,12 @@ document.addEventListener('DOMContentLoaded', () => {
               'agent',
               messageHtml,
               displayMessageId,
-              true,
+              requiresHtmlRendering, // Use the flag here
               validationErrors,
             );
           }
         });
-        break;
+        break; // Added missing break statement
       case 'message': {
         const textPart = event.parts?.find(p => p.text);
         if (textPart && textPart.text) {
@@ -616,7 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sender: string,
     content: string,
     messageId: string,
-    isHtml = false,
+    isHtml = false, // Default to false if not provided
     validationErrors: string[] = [],
   ) {
     const placeholder = chatMessages.querySelector('.placeholder-text');
@@ -629,9 +655,10 @@ document.addEventListener('DOMContentLoaded', () => {
     messageContent.className = 'message-content';
 
     if (isHtml) {
-      messageContent.innerHTML = content;
+      // Use DOMPurify again here for safety, even if content was sanitized before
+      messageContent.innerHTML = DOMPurify.sanitize(content);
     } else {
-      messageContent.textContent = content;
+      messageContent.textContent = content; // textContent automatically handles escaping
     }
 
     messageElement.appendChild(messageContent);
@@ -653,11 +680,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     messageElement.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName !== 'A') {
+      // Prevent modal opening when clicking on links or images within the message
+      if (target.tagName !== 'A' && target.tagName !== 'IMG') {
         const jsonData =
           sender === 'user'
-            ? rawLogStore[messageId]?.request
-            : messageJsonStore[messageId];
+            ? rawLogStore[messageId]?.request // Assuming user messages correspond to requests
+            : messageJsonStore[messageId]; // Agent messages use the stored response/event
         showJsonInModal(jsonData);
       }
     });
