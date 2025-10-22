@@ -526,53 +526,60 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       }
       case 'artifact-update':
-        event.artifact?.parts?.forEach(p => {
-          let content: string | null = null;
-          let requiresHtmlRendering = false; // Flag to indicate if content is HTML
+      event.artifact?.parts?.forEach(p => {
+        let content: string | null = null;
+        let requiresHtmlRendering = false; // Flag to indicate if content is HTML
 
-          if ('text' in p && p.text) {
-            // Render markdown text
-            content = DOMPurify.sanitize(marked.parse(p.text) as string);
+        if ('text' in p && p.text) {
+          // Render markdown text
+          content = DOMPurify.sanitize(marked.parse(p.text) as string);
+          requiresHtmlRendering = true;
+        } else if ('file' in p && p.file) {
+          const { uri, mimeType, bytes, name } = p.file;
+
+          // Validate common image mime types instead of sanitizing
+          const allowedImageTypesRegex = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp)$/i; // Added more types and case-insensitivity
+
+          if (bytes && mimeType && allowedImageTypesRegex.test(mimeType)) {
+            // Mime type is valid and allowed, use it directly
+            const imageSrc = `data:${mimeType};base64,${bytes}`;
+            const altText = name ? DOMPurify.sanitize(name) : 'Received Image'; // Sanitize alt text only
+            content = `<img src="${imageSrc}" alt="${altText}" style="max-width: 100%; height: auto;">`;
             requiresHtmlRendering = true;
-          } else if ('file' in p && p.file) {
-            // *** MODIFIED SECTION START ***
-            const { uri, mimeType, bytes, name } = p.file;
-
-            if (bytes && mimeType && mimeType.startsWith('image/')) {
-              // It's an image with base64 data
-              const sanitizedMimeType = DOMPurify.sanitize(mimeType);
-              const imageSrc = `data:${sanitizedMimeType};base64,${bytes}`;
-              const altText = name ? DOMPurify.sanitize(name) : 'Received Image';
-              content = `<img src="${imageSrc}" alt="${altText}" style="max-width: 100%; height: auto;">`;
-              requiresHtmlRendering = true;
-            } else if (uri && mimeType) {
-              // It's a file with a URI (non-image or image link)
-              const sanitizedMimeType = DOMPurify.sanitize(mimeType);
-              const sanitizedUri = DOMPurify.sanitize(uri);
-              content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
-              requiresHtmlRendering = true;
-            }
-            // *** MODIFIED SECTION END ***
-          } else if ('data' in p && p.data) {
-            // Render JSON data
-            content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+          } else if (uri && mimeType) {
+            // Fallback for non-base64 images or non-allowed/invalid image mime types with a URI
+            const sanitizedMimeType = DOMPurify.sanitize(mimeType); // Sanitize here as it's displayed text
+            const sanitizedUri = DOMPurify.sanitize(uri);
+            content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
             requiresHtmlRendering = true;
+          } else if (mimeType) {
+             // Handle case where it might be a file with bytes but not a recognized image type
+             const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+             content = `Received file data (${sanitizedMimeType}), cannot display inline.`;
+             // No HTML rendering needed for plain text
           }
+          // *** MODIFIED SECTION END ***
+        } else if ('data' in p && p.data) {
+          // Render JSON data
+          content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+          requiresHtmlRendering = true;
+        }
 
-          if (content !== null) {
-            const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
-            const messageHtml = `${kindChip} ${content}`;
+        if (content !== null) {
+          const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
+          // Ensure messageHtml is correctly sanitized if requiresHtmlRendering is true
+          const messageHtml = `${kindChip} ${requiresHtmlRendering ? content : DOMPurify.sanitize(content)}`;
 
-            appendMessage(
-              'agent',
-              messageHtml,
-              displayMessageId,
-              requiresHtmlRendering, // Use the flag here
-              validationErrors,
-            );
-          }
-        });
-        break; // Added missing break statement
+          appendMessage(
+            'agent',
+            messageHtml, // Pass the potentially HTML content
+            displayMessageId,
+            requiresHtmlRendering, // Use the flag here
+            validationErrors,
+          );
+        }
+      });
+      break;
       case 'message': {
         const textPart = event.parts?.find(p => p.text);
         if (textPart && textPart.text) {
