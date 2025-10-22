@@ -13,7 +13,14 @@ interface AgentResponseEvent {
   };
   artifact?: {
     parts?: (
-      | {file?: {uri: string; mimeType: string}}
+      | {
+          file?: {
+            uri?: string; // URI might be optional if bytes are present
+            mimeType: string;
+            bytes?: string; // Added bytes property for base64
+            name?: string; // Added optional name property
+          };
+        }
       | {text?: string}
       | {data?: object}
     )[];
@@ -519,34 +526,60 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       }
       case 'artifact-update':
-        event.artifact?.parts?.forEach(p => {
-          let content: string | null = null;
+      event.artifact?.parts?.forEach(p => {
+        let content: string | null = null;
+        let requiresHtmlRendering = false; // Flag to indicate if content is HTML
 
-          if ('text' in p && p.text) {
-            content = DOMPurify.sanitize(marked.parse(p.text) as string);
-          } else if ('file' in p && p.file) {
-            const {uri, mimeType} = p.file;
-            const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+        if ('text' in p && p.text) {
+          // Render markdown text
+          content = DOMPurify.sanitize(marked.parse(p.text) as string);
+          requiresHtmlRendering = true;
+        } else if ('file' in p && p.file) {
+          const { uri, mimeType, bytes, name } = p.file;
+
+          // Validate common image mime types instead of sanitizing
+          const allowedImageTypesRegex = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp)$/i; // Added more types and case-insensitivity
+
+          if (bytes && mimeType && allowedImageTypesRegex.test(mimeType)) {
+            // Mime type is valid and allowed, use it directly
+            const imageSrc = `data:${mimeType};base64,${bytes}`;
+            const altText = name ? DOMPurify.sanitize(name) : 'Received Image'; // Sanitize alt text only
+            content = `<img src="${imageSrc}" alt="${altText}" style="max-width: 100%; height: auto;">`;
+            requiresHtmlRendering = true;
+          } else if (uri && mimeType) {
+            // Fallback for non-base64 images or non-allowed/invalid image mime types with a URI
+            const sanitizedMimeType = DOMPurify.sanitize(mimeType); // Sanitize here as it's displayed text
             const sanitizedUri = DOMPurify.sanitize(uri);
             content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
-          } else if ('data' in p && p.data) {
-            content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+            requiresHtmlRendering = true;
+          } else if (mimeType) {
+             // Handle case where it might be a file with bytes but not a recognized image type
+             const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+             content = `Received file data (${sanitizedMimeType}), cannot display inline.`;
+             // No HTML rendering needed for plain text
           }
+          // *** MODIFIED SECTION END ***
+        } else if ('data' in p && p.data) {
+          // Render JSON data
+          content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+          requiresHtmlRendering = true;
+        }
 
-          if (content !== null) {
-            const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
-            const messageHtml = `${kindChip} ${content}`;
+        if (content !== null) {
+          const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
+          // Ensure messageHtml is correctly sanitized if requiresHtmlRendering is true
+          const messageHtml = `${kindChip} ${requiresHtmlRendering ? content : DOMPurify.sanitize(content)}`;
 
-            appendMessage(
-              'agent',
-              messageHtml,
-              displayMessageId,
-              true,
-              validationErrors,
-            );
-          }
-        });
-        break;
+          appendMessage(
+            'agent',
+            messageHtml, // Pass the potentially HTML content
+            displayMessageId,
+            requiresHtmlRendering, // Use the flag here
+            validationErrors,
+          );
+        }
+      });
+      break;
       case 'message': {
         const textPart = event.parts?.find(p => p.text);
         if (textPart && textPart.text) {
@@ -616,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sender: string,
     content: string,
     messageId: string,
-    isHtml = false,
+    isHtml = false, // Default to false if not provided
     validationErrors: string[] = [],
   ) {
     const placeholder = chatMessages.querySelector('.placeholder-text');
@@ -629,9 +662,10 @@ document.addEventListener('DOMContentLoaded', () => {
     messageContent.className = 'message-content';
 
     if (isHtml) {
-      messageContent.innerHTML = content;
+      // Use DOMPurify again here for safety, even if content was sanitized before
+      messageContent.innerHTML = DOMPurify.sanitize(content);
     } else {
-      messageContent.textContent = content;
+      messageContent.textContent = content; // textContent automatically handles escaping
     }
 
     messageElement.appendChild(messageContent);
@@ -653,11 +687,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     messageElement.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName !== 'A') {
+      // Prevent modal opening when clicking on links or images within the message
+      if (target.tagName !== 'A' && target.tagName !== 'IMG') {
         const jsonData =
           sender === 'user'
-            ? rawLogStore[messageId]?.request
-            : messageJsonStore[messageId];
+            ? rawLogStore[messageId]?.request // Assuming user messages correspond to requests
+            : messageJsonStore[messageId]; // Agent messages use the stored response/event
         showJsonInModal(jsonData);
       }
     });
