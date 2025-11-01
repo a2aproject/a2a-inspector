@@ -17,14 +17,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dompurify": "^3.2.6",
-    "marked": "^16.0.0",
+    "dompurify": "^3.3.0",
+    "marked": "^16.4.1",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
-    "@types/node": "^24.3.1",
-    "esbuild": "^0.25.9",
+    "@types/node": "^24.9.2",
+    "esbuild": "^0.25.11",
     "gts": "^6.0.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.3"
   }
 }
