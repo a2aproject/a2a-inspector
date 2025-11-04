@@ -18,9 +18,9 @@ from a2a.types import (
     Role,
     Task,
     TaskArtifactUpdateEvent,
+    TaskStatusUpdateEvent,
     TextPart,
     TransportProtocol,
-    TaskStatusUpdateEvent,
 )
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -101,9 +101,7 @@ async def _process_a2a_response(
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
     # the payload's ID for client-side correlation if it exists.
 
-    event: (
-        TaskStatusUpdateEvent | TaskArtifactUpdateEvent | Task | Message | None
-    ) = None
+    event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | Task | Message
     if isinstance(client_event, tuple):
         event = client_event[1] if client_event[1] else client_event[0]
     else:
