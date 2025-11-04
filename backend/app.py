@@ -10,7 +10,7 @@ import socketio
 import validators
 
 from a2a.client import A2ACardResolver, A2AClient
-from a2a.client.client import ClientEvent, ClientConfig
+from a2a.client.client import ClientConfig, ClientEvent
 from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
@@ -85,10 +85,8 @@ async def _process_a2a_response(
     request_id: str,
 ) -> None:
     """Processes a response from the A2A client, validates it, and emits events.
-
     Handles both success and error responses.
     """
-
     # The response payload 'event' (Task, Message, etc.) may have its own 'id',
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
     # the payload's ID for client-side correlation if it exists.
