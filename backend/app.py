@@ -10,18 +10,14 @@ import socketio
 import validators
 
 from a2a.client import A2ACardResolver, A2AClient
+from a2a.client.client import ClientEvent, ClientConfig
+from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
-    JSONRPCErrorResponse,
     Message,
-    MessageSendConfiguration,
-    MessageSendParams,
     Role,
-    SendMessageRequest,
-    SendMessageResponse,
-    SendStreamingMessageRequest,
-    SendStreamingMessageResponse,
     TextPart,
+    TransportProtocol,
 )
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -84,7 +80,7 @@ async def _emit_debug_log(
 
 
 async def _process_a2a_response(
-    result: SendMessageResponse | SendStreamingMessageResponse,
+    client_event: ClientEvent | Message,
     sid: str,
     request_id: str,
 ) -> None:
@@ -92,25 +88,17 @@ async def _process_a2a_response(
 
     Handles both success and error responses.
     """
-    if isinstance(result.root, JSONRPCErrorResponse):
-        error_data = result.root.error.model_dump(exclude_none=True)
-        await _emit_debug_log(sid, request_id, 'error', error_data)
-        await sio.emit(
-            'agent_response',
-            {
-                'error': error_data.get('message', 'Unknown error'),
-                'id': request_id,
-            },
-            to=sid,
-        )
-        return
 
-    # Success case
-    event = result.root.result
     # The response payload 'event' (Task, Message, etc.) may have its own 'id',
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
     # the payload's ID for client-side correlation if it exists.
-    response_id = getattr(event, 'id', request_id)
+
+    event = client_event
+
+    if isinstance(client_event, tuple):
+        event = client_event[1] if client_event[1] else client_event[0]
+
+    response_id = event.id if event.id else request_id
 
     response_data = event.model_dump(exclude_none=True)
     response_data['id'] = response_id
@@ -268,7 +256,16 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
-        a2a_client = A2AClient(httpx_client, agent_card=card)
+        # a2a_client = A2AClient(httpx_client, agent_card=card)
+        a2a_config = ClientConfig(
+            supported_transports=[
+                TransportProtocol.http_json,
+            ],
+            use_client_preference=True,
+            httpx_client=httpx.AsyncClient(headers=custom_headers),
+        )
+        factory = ClientFactory(a2a_config)
+        a2a_client = factory.create(card)
         clients[sid] = (httpx_client, a2a_client, card)
         await sio.emit('client_initialized', {'status': 'success'}, to=sid)
     except Exception as e:
@@ -297,7 +294,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         )
         return
 
-    _, a2a_client, card = clients[sid]
+    _, a2a_client, _ = clients[sid]
 
     message = Message(
         role=Role.user,
@@ -306,50 +303,11 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         context_id=context_id,
         metadata=metadata,
     )
-    payload = MessageSendParams(
-        message=message,
-        configuration=MessageSendConfiguration(
-            accepted_output_modes=['text/plain', 'video/mp4']
-        ),
-    )
-
-    supports_streaming = (
-        hasattr(card.capabilities, 'streaming')
-        and card.capabilities.streaming is True
-    )
 
     try:
-        if supports_streaming:
-            stream_request = SendStreamingMessageRequest(
-                id=message_id,
-                method='message/stream',
-                jsonrpc='2.0',
-                params=payload,
-            )
-            await _emit_debug_log(
-                sid,
-                message_id,
-                'request',
-                stream_request.model_dump(exclude_none=True),
-            )
-            response_stream = a2a_client.send_message_streaming(stream_request)
-            async for stream_result in response_stream:
-                await _process_a2a_response(stream_result, sid, message_id)
-        else:
-            send_message_request = SendMessageRequest(
-                id=message_id,
-                method='message/send',
-                jsonrpc='2.0',
-                params=payload,
-            )
-            await _emit_debug_log(
-                sid,
-                message_id,
-                'request',
-                send_message_request.model_dump(exclude_none=True),
-            )
-            send_result = await a2a_client.send_message(send_message_request)
-            await _process_a2a_response(send_result, sid, message_id)
+        response_stream = a2a_client.send_message(message)
+        async for stream_result in response_stream:
+            await _process_a2a_response(stream_result, sid, message_id)
 
     except Exception as e:
         logger.error(f'Failed to send message for sid {sid}', exc_info=True)
