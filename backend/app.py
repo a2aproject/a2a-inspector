@@ -85,7 +85,14 @@ async def _process_a2a_response(
     request_id: str,
 ) -> None:
     """Processes a response from the A2A client, validates it, and emits events.
-    Handles both success and error responses.
+     Handles both success and error responses.
+
+     This function handles the incoming ClientEvent or Message object,
+     correlating it with the original request using the session ID and request ID.
+    Args:
+    client_event: The event or message received.
+    sid: The session ID associated with the original request.
+    request_id: The unique ID of the original request.
     """
     # The response payload 'event' (Task, Message, etc.) may have its own 'id',
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
