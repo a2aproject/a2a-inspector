@@ -9,15 +9,18 @@ import httpx
 import socketio
 import validators
 
-from a2a.client import A2ACardResolver, A2AClient
-from a2a.client.client import ClientConfig, ClientEvent
+from a2a.client import A2ACardResolver
+from a2a.client.client import Client, ClientConfig, ClientEvent
 from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
     Message,
     Role,
+    Task,
+    TaskArtifactUpdateEvent,
     TextPart,
     TransportProtocol,
+    TaskStatusUpdateEvent,
 )
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -62,7 +65,7 @@ templates = Jinja2Templates(directory='../frontend/public')
 # NOTE: This global dictionary stores state. For a simple inspector tool with
 # transient connections, this is acceptable. For a scalable production service,
 # a more robust state management solution (e.g., Redis) would be required.
-clients: dict[str, tuple[httpx.AsyncClient, A2AClient, AgentCard]] = {}
+clients: dict[str, tuple[httpx.AsyncClient, Client, AgentCard]] = {}
 
 
 # ==============================================================================
@@ -98,12 +101,15 @@ async def _process_a2a_response(
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
     # the payload's ID for client-side correlation if it exists.
 
-    event = client_event
-
+    event: (
+        TaskStatusUpdateEvent | TaskArtifactUpdateEvent | Task | Message | None
+    ) = None
     if isinstance(client_event, tuple):
         event = client_event[1] if client_event[1] else client_event[0]
+    else:
+        event = client_event
 
-    response_id = event.id if event.id else request_id
+    response_id = getattr(event, 'id', request_id)
 
     response_data = event.model_dump(exclude_none=True)
     response_data['id'] = response_id
