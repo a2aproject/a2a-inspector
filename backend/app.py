@@ -293,6 +293,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 
     message_id = json_data.get('id', str(uuid4()))
     context_id = json_data.get('contextId')
+    task_id = json_data.get('taskId')
     metadata = json_data.get('metadata', {})
 
     if sid not in clients:
@@ -310,6 +311,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
         message_id=message_id,
         context_id=context_id,
+        task_id=task_id,
         metadata=metadata,
     )
 

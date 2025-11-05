@@ -341,3 +341,4 @@ poetry.toml
 pyrightconfig.json
 
 frontend/public/script.js
+frontend/public/script.js.map

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "esbuild src/script.ts --bundle --outfile=public/script.js --platform=browser",
+    "dev": "esbuild src/script.ts --bundle --outfile=public/script.js --platform=browser --sourcemap",
     "lint": "gts lint",
     "clean": "gts clean",
     "compile": "tsc",
