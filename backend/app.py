@@ -323,7 +323,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         )
         return
 
-    _, a2a_client, card, transport = clients[sid]
+    _, a2a_client, _, transport = clients[sid]
 
     attachments = json_data.get('attachments', [])
 
