@@ -327,9 +327,9 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 
     attachments = json_data.get('attachments', [])
 
-    parts: list[TextPart | FilePart] = []
+    parts: list = []
     if message_text:
-        parts.append(TextPart(text=message_text))  # type: ignore[arg-type]
+        parts.append(TextPart(text=str(message_text)))  # type: ignore[arg-type]
 
     for attachment in attachments:
         parts.append(
