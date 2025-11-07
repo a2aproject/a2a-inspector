@@ -269,6 +269,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         a2a_config = ClientConfig(
             supported_transports=[
                 TransportProtocol.http_json,
+                TransportProtocol.jsonrpc,
+                TransportProtocol.grpc,
             ],
             use_client_preference=True,
             httpx_client=httpx.AsyncClient(headers=custom_headers),
