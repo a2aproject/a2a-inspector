@@ -2,6 +2,24 @@ import {io} from 'socket.io-client';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 
+// A2A File types (matching spec)
+interface FileBase {
+  name?: string;
+  mimeType?: string;
+}
+
+interface FileWithBytes extends FileBase {
+  bytes: string;
+  uri?: never;
+}
+
+interface FileWithUri extends FileBase {
+  uri: string;
+  bytes?: never;
+}
+
+type FileContent = FileWithBytes | FileWithUri;
+
 interface AgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
@@ -12,12 +30,19 @@ interface AgentResponseEvent {
     message?: {parts?: {text?: string}[]};
   };
   artifact?: {
-    parts?: (
-      | {file?: {uri: string; mimeType: string}}
-      | {text?: string}
-      | {data?: object}
-    )[];
+    parts?: ({file?: FileContent} | {text?: string} | {data?: object})[];
   };
+  artifacts?: Array<{
+    artifactId?: string;
+    name?: string;
+    description?: string;
+    metadata?: object;
+    parts?: (
+      | {kind?: string; file?: FileContent}
+      | {kind?: string; text?: string}
+      | {kind?: string; data?: object}
+    )[];
+  }>;
   parts?: {text?: string}[];
   validation_errors: string[];
 }
@@ -44,6 +69,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const INITIALIZATION_TIMEOUT_MS = 10000;
   const MAX_LOGS = 500;
 
+  const themeCheckbox = document.getElementById(
+    'theme-checkbox',
+  ) as HTMLInputElement;
+  const highlightLight = document.getElementById(
+    'highlight-light',
+  ) as HTMLLinkElement;
+  const highlightDark = document.getElementById(
+    'highlight-dark',
+  ) as HTMLLinkElement;
+
+  const updateSyntaxHighlighting = (isDark: boolean) => {
+    if (isDark) {
+      highlightLight.disabled = true;
+      highlightDark.disabled = false;
+    } else {
+      highlightLight.disabled = false;
+      highlightDark.disabled = true;
+    }
+  };
+
+  themeCheckbox.addEventListener('change', () => {
+    document.body.classList.toggle('dark-mode');
+    const isDark = document.body.classList.contains('dark-mode');
+    localStorage.setItem('theme', isDark ? 'dark' : 'light');
+    updateSyntaxHighlighting(isDark);
+  });
   const connectBtn = document.getElementById(
     'connect-btn',
   ) as HTMLButtonElement;
@@ -101,7 +152,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalCloseBtn = document.querySelector(
     '.modal-close-btn',
   ) as HTMLElement;
+  const newSessionBtn = document.getElementById(
+    'new-session-btn',
+  ) as HTMLButtonElement;
+  const fileInput = document.getElementById('file-input') as HTMLInputElement;
+  const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement;
+  const attachmentsPreview = document.getElementById(
+    'attachments-preview',
+  ) as HTMLElement;
 
+  let contextId: string | null = null;
+  let isConnected = false;
+  let supportedInputModes: string[] = ['text/plain'];
+  let supportedOutputModes: string[] = ['text/plain'];
   let isResizing = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
@@ -109,6 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const logIdQueue: string[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
+
+  // Attachment state
+  interface Attachment {
+    name: string;
+    size: number;
+    mimeType: string;
+    data: string; // base64 encoded
+    thumbnail?: string; // for images
+  }
+  const attachments: Attachment[] = [];
 
   debugHandle.addEventListener('mousedown', (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -145,7 +218,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Generic function to setup toggle functionality
   function setupToggle(
     toggleElement: HTMLElement,
     contentElement: HTMLElement,
@@ -160,17 +232,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Setup toggle functionality for both sections
   setupToggle(httpHeadersToggle, httpHeadersContent);
   setupToggle(messageMetadataToggle, messageMetadataContent);
 
-  // Add a new, empty header field when the button is clicked
-  addHeaderBtn.addEventListener('click', () => addHeaderField());
+  const sessionDetailsToggle = document.getElementById(
+    'session-details-toggle',
+  ) as HTMLElement;
+  const sessionDetailsContent = document.getElementById(
+    'session-details-content',
+  ) as HTMLElement;
+  setupToggle(sessionDetailsToggle, sessionDetailsContent);
 
-  // Add a new, empty metadata field when the button is clicked
+  addHeaderBtn.addEventListener('click', () => addHeaderField());
   addMetadataBtn.addEventListener('click', () => addMetadataField());
 
-  // Generic function to setup remove item event listeners
   function setupRemoveItemListener(
     listElement: HTMLElement,
     removeBtnSelector: string,
@@ -186,7 +261,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Setup remove item listeners
   setupRemoveItemListener(headersList, '.remove-header-btn', '.header-item');
   setupRemoveItemListener(
     metadataList,
@@ -194,7 +268,136 @@ document.addEventListener('DOMContentLoaded', () => {
     '.metadata-item',
   );
 
-  // Generic function to add key-value fields
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Extract base64 data (remove data:...; prefix)
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const createImageThumbnail = (file: File): Promise<string> => {
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const renderAttachmentPreview = (attachment: Attachment, index: number) => {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+
+    // Add thumbnail for images
+    if (attachment.mimeType.startsWith('image/') && attachment.thumbnail) {
+      const thumbnail = document.createElement('img');
+      thumbnail.className = 'attachment-thumbnail';
+      thumbnail.src = attachment.thumbnail;
+      chip.appendChild(thumbnail);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'attachment-info';
+
+    const name = document.createElement('div');
+    name.className = 'attachment-name';
+    name.textContent = attachment.name;
+
+    const size = document.createElement('div');
+    size.className = 'attachment-size';
+    size.textContent = formatFileSize(attachment.size);
+
+    info.appendChild(name);
+    info.appendChild(size);
+    chip.appendChild(info);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'attachment-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove attachment';
+    removeBtn.addEventListener('click', () => {
+      attachments.splice(index, 1);
+      updateAttachmentPreview();
+    });
+    chip.appendChild(removeBtn);
+
+    return chip;
+  };
+
+  const updateAttachmentPreview = () => {
+    attachmentsPreview.innerHTML = '';
+    attachments.forEach((attachment, index) => {
+      attachmentsPreview.appendChild(
+        renderAttachmentPreview(attachment, index),
+      );
+    });
+  };
+
+  const handleFileSelection = async (files: FileList) => {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+
+      // Check if file type is supported
+      const isSupported = supportedInputModes.some(mode => {
+        if (mode === '*/*') return true;
+        if (mode.endsWith('/*')) {
+          const prefix = mode.split('/')[0];
+          return file.type.startsWith(prefix + '/');
+        }
+        return file.type === mode;
+      });
+
+      if (!isSupported) {
+        alert(
+          `File type ${file.type} is not supported by this agent. Supported types: ${supportedInputModes.join(', ')}`,
+        );
+        continue;
+      }
+
+      const base64Data = await fileToBase64(file);
+      const attachment: Attachment = {
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        data: base64Data,
+      };
+
+      // Create thumbnail for images
+      if (file.type.startsWith('image/')) {
+        attachment.thumbnail = await createImageThumbnail(file);
+      }
+
+      attachments.push(attachment);
+    }
+
+    updateAttachmentPreview();
+    fileInput.value = ''; // Reset file input
+  };
+
+  attachBtn.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+      void handleFileSelection(fileInput.files);
+    }
+  });
+
   function addKeyValueField(
     list: HTMLElement,
     classes: {item: string; key: string; value: string; removeBtn: string},
@@ -213,7 +416,6 @@ document.addEventListener('DOMContentLoaded', () => {
     list.insertAdjacentHTML('beforeend', itemHTML);
   }
 
-  // Function to add a new header field
   function addHeaderField(name = '', value = '') {
     addKeyValueField(
       headersList,
@@ -230,7 +432,6 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  // Function to add a new metadata field
   function addMetadataField(key = '', value = '') {
     addKeyValueField(
       metadataList,
@@ -247,7 +448,6 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  // Generic function to collect key-value pairs from the DOM
   function getKeyValuePairs(
     list: HTMLElement,
     itemSelector: string,
@@ -272,7 +472,6 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  // Function to collect all headers
   function getCustomHeaders(): Record<string, string> {
     return getKeyValuePairs(
       headersList,
@@ -282,7 +481,6 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  // Function to collect all metadata
   function getMessageMetadata(): Record<string, string> {
     return getKeyValuePairs(
       metadataList,
@@ -301,6 +499,10 @@ document.addEventListener('DOMContentLoaded', () => {
   toggleConsoleBtn.addEventListener('click', () => {
     const isHidden = debugConsole.classList.toggle('hidden');
     toggleConsoleBtn.textContent = isHidden ? 'Show' : 'Hide';
+  });
+
+  newSessionBtn.addEventListener('click', () => {
+    resetSession();
   });
 
   modalCloseBtn.addEventListener('click', () =>
@@ -355,10 +557,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.disabled = true;
     sendBtn.disabled = true;
 
-    // Get custom headers
     const customHeaders = getCustomHeaders();
-
-    // Prepare request headers
     const requestHeaders = {
       'Content-Type': 'application/json',
       ...customHeaders,
@@ -401,11 +600,11 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrorsContainer.innerHTML = `<h3>Validation Errors</h3><ul>${data.validation_errors.map((e: string) => `<li>${e}</li>`).join('')}</ul>`;
       } else {
         validationErrorsContainer.innerHTML =
-          '<p style="color: green;">Agent card is valid.</p>';
+          '<p class="success-text">Agent card is valid.</p>';
       }
     } catch (error) {
       clearTimeout(initializationTimeout);
-      validationErrorsContainer.innerHTML = `<p style="color: red;">Error: ${(error as Error).message}</p>`;
+      validationErrorsContainer.innerHTML = `<p class="error-text">Error: ${(error as Error).message}</p>`;
       chatInput.disabled = true;
       sendBtn.disabled = true;
     }
@@ -413,53 +612,191 @@ document.addEventListener('DOMContentLoaded', () => {
 
   socket.on(
     'client_initialized',
-    (data: {status: string; message?: string}) => {
+    (data: {
+      status: string;
+      message?: string;
+      transport?: string;
+      inputModes?: string[];
+      outputModes?: string[];
+    }) => {
       clearTimeout(initializationTimeout);
       if (data.status === 'success') {
         chatInput.disabled = false;
         sendBtn.disabled = false;
         chatMessages.innerHTML =
-          '<p class="placeholder-text">Ready to chat.</p>';
+          '<p class="placeholder-text">Send a message to start a new session.</p>';
         debugContent.innerHTML = '';
         Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
         logIdQueue.length = 0;
         Object.keys(messageJsonStore).forEach(
           key => delete messageJsonStore[key],
         );
+
+        // Set connection state and reset session when connecting to a new agent
+        isConnected = true;
+        resetSession();
+
+        // Store supported modalities
+        supportedInputModes = data.inputModes || ['text/plain'];
+        supportedOutputModes = data.outputModes || ['text/plain'];
+
+        // Update transport in Session Details
+        const sessionTransport = document.getElementById(
+          'session-transport',
+        ) as HTMLElement;
+        if (data.transport && sessionTransport) {
+          sessionTransport.textContent = data.transport;
+        } else if (sessionTransport) {
+          sessionTransport.textContent = 'Unknown';
+        }
+
+        // Update modalities display in Session Details
+        updateModalitiesDisplay();
+
+        // Enable attach button
+        attachBtn.disabled = false;
       } else {
-        validationErrorsContainer.innerHTML = `<p style="color: red;">Error initializing client: ${data.message}</p>`;
+        validationErrorsContainer.innerHTML = `<p class="error-text">Error initializing client: ${data.message}</p>`;
+        isConnected = false;
+        updateSessionUI();
       }
     },
   );
 
-  let contextId: string | null = null;
+  const getModalityIcon = (mimeType: string): string => {
+    if (mimeType.startsWith('image/')) return '🖼️';
+    if (mimeType.startsWith('audio/')) return '🎵';
+    if (mimeType.startsWith('video/')) return '🎬';
+    if (mimeType.startsWith('text/')) return '📝';
+    if (mimeType.includes('pdf')) return '📄';
+    return '📎';
+  };
+
+  const updateModalitiesDisplay = () => {
+    const inputModesEl = document.getElementById('session-input-modes');
+    const outputModesEl = document.getElementById('session-output-modes');
+
+    if (inputModesEl) {
+      const inputHTML = supportedInputModes
+        .map(
+          mode =>
+            `<span class="modality-tag">${getModalityIcon(mode)} ${mode}</span>`,
+        )
+        .join('');
+      inputModesEl.innerHTML =
+        inputHTML || '<span class="modality-none">None specified</span>';
+    }
+
+    if (outputModesEl) {
+      const outputHTML = supportedOutputModes
+        .map(
+          mode =>
+            `<span class="modality-tag">${getModalityIcon(mode)} ${mode}</span>`,
+        )
+        .join('');
+      outputModesEl.innerHTML =
+        outputHTML || '<span class="modality-none">None specified</span>';
+    }
+  };
+
+  const updateSessionUI = () => {
+    const sessionDetails = document.getElementById(
+      'session-details',
+    ) as HTMLElement;
+    const newSessionBtn = document.getElementById(
+      'new-session-btn',
+    ) as HTMLButtonElement;
+
+    if (!isConnected) {
+      if (sessionDetails) {
+        sessionDetails.textContent = 'No active session';
+      }
+      if (newSessionBtn) {
+        newSessionBtn.disabled = true;
+      }
+    } else if (contextId) {
+      if (sessionDetails) {
+        sessionDetails.textContent = contextId;
+      }
+      if (newSessionBtn) {
+        newSessionBtn.disabled = false;
+      }
+    } else {
+      if (sessionDetails) {
+        sessionDetails.textContent = 'No active session';
+      }
+      if (newSessionBtn) {
+        newSessionBtn.disabled = true;
+      }
+
+      const placeholder = chatMessages.querySelector('.placeholder-text');
+      if (placeholder) {
+        placeholder.textContent = 'Send a message to start a new session.';
+      }
+    }
+  };
+
+  const resetSession = () => {
+    contextId = null;
+    chatMessages.innerHTML =
+      '<p class="placeholder-text">Send a message to start a new session.</p>';
+    updateSessionUI();
+  };
+
+  const showLoadingIndicator = () => {
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'message agent-loading';
+    loadingDiv.id = 'loading-indicator';
+    loadingDiv.innerHTML = `
+      <div class="loading-spinner"></div>
+      <span class="loading-text">Agent is thinking...</span>
+    `;
+    chatMessages.appendChild(loadingDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  };
+
+  const hideLoadingIndicator = () => {
+    const loadingIndicator = document.getElementById('loading-indicator');
+    if (loadingIndicator) {
+      loadingIndicator.remove();
+    }
+  };
 
   const sendMessage = () => {
     const messageText = chatInput.value;
-    if (messageText.trim() && !chatInput.disabled) {
-      // Sanitize the user's input before doing anything else
+    if ((messageText.trim() || attachments.length > 0) && !chatInput.disabled) {
       const sanitizedMessage = DOMPurify.sanitize(messageText);
 
-      // Optional but recommended: prevent sending messages that are empty after sanitization
-      if (!sanitizedMessage.trim()) {
-        chatInput.value = '';
-        return;
-      }
-
-      const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       const metadata = getMessageMetadata();
+      const attachmentsForDisplay = [...attachments];
 
-      // Use the sanitized message when displaying it locally
-      appendMessage('user', sanitizedMessage, messageId);
+      appendMessage(
+        'user',
+        sanitizedMessage,
+        messageId,
+        false,
+        [],
+        attachmentsForDisplay,
+      );
+      showLoadingIndicator();
 
-      // Use the sanitized message when sending it to the server, along with metadata
+      const attachmentsToSend = attachments.map(a => ({
+        data: a.data,
+        mimeType: a.mimeType,
+      }));
+
       socket.emit('send_message', {
         message: sanitizedMessage,
         id: messageId,
         contextId,
         metadata,
+        attachments: attachmentsToSend,
       });
+
       chatInput.value = '';
+      attachments.length = 0;
+      updateAttachmentPreview();
     }
   };
 
@@ -468,8 +805,56 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
 
+  const renderMultimediaContent = (uri: string, mimeType: string): string => {
+    const sanitizedUri = DOMPurify.sanitize(uri);
+    const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+
+    if (mimeType.startsWith('image/')) {
+      return `<div class="media-container"><img src="${sanitizedUri}" alt="Image attachment" class="media-image" /></div>`;
+    } else if (mimeType.startsWith('audio/')) {
+      return `<div class="media-container"><audio controls class="media-audio"><source src="${sanitizedUri}" type="${sanitizedMimeType}">Your browser does not support audio playback.</audio></div>`;
+    } else if (mimeType.startsWith('video/')) {
+      return `<div class="media-container"><video controls class="media-video"><source src="${sanitizedUri}" type="${sanitizedMimeType}">Your browser does not support video playback.</video></div>`;
+    } else if (mimeType === 'application/pdf') {
+      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">📄 View PDF</a></div>`;
+    } else {
+      // For other file types, show a download link
+      const icon = getModalityIcon(mimeType);
+      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">${icon} Download file (${sanitizedMimeType})</a></div>`;
+    }
+  };
+
+  const renderBase64Data = (base64Data: string, mimeType: string): string => {
+    const dataUri = `data:${mimeType};base64,${base64Data}`;
+    return renderMultimediaContent(dataUri, mimeType);
+  };
+
+  const processPart = (p: any): string | null => {
+    if (p.text) {
+      return DOMPurify.sanitize(marked.parse(p.text) as string);
+    } else if (p.file) {
+      const {uri, bytes, mimeType} = p.file;
+      if (bytes && mimeType) {
+        return renderBase64Data(bytes, mimeType);
+      } else if (uri && mimeType) {
+        return renderMultimediaContent(uri, mimeType);
+      }
+    } else if (p.data) {
+      const dataObj = p.data as any;
+      if (dataObj.mimeType && typeof dataObj.data === 'string') {
+        return renderBase64Data(dataObj.data, dataObj.mimeType);
+      } else {
+        return `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+      }
+    }
+    return null;
+  };
+
   socket.on('agent_response', (event: AgentResponseEvent) => {
-    const displayMessageId = `display-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Hide loading indicator on first response
+    hideLoadingIndicator();
+
+    const displayMessageId = `display-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     messageJsonStore[displayMessageId] = event;
 
     const validationErrors = event.validation_errors || [];
@@ -486,21 +871,53 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (event.contextId) contextId = event.contextId;
+    if (event.contextId) {
+      contextId = event.contextId;
+      updateSessionUI();
+    }
 
     switch (event.kind) {
-      case 'task':
-        if (event.status) {
-          const messageHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+      case 'task': {
+        // For HTTP+JSON tasks with artifacts, display content with kind chip (like JSON-RPC messages)
+        const hasArtifacts = event.artifacts && event.artifacts.length > 0;
+
+        if (hasArtifacts && event.artifacts) {
+          // Collect all artifact content
+          const allContent: string[] = [];
+
+          event.artifacts.forEach((artifact: any) => {
+            artifact.parts?.forEach((p: any) => {
+              const content = processPart(p);
+              if (content) allContent.push(content);
+            });
+          });
+
+          // Display with kind chip for consistency with JSON-RPC messages
+          if (allContent.length > 0) {
+            const combinedContent = allContent.join('');
+            const kindChip = `<span class="kind-chip kind-chip-${event.kind}">${event.kind}</span>`;
+            const messageHtml = `${kindChip} ${combinedContent}`;
+            appendMessage(
+              'agent',
+              messageHtml,
+              displayMessageId,
+              true,
+              validationErrors,
+            );
+          }
+        } else if (event.status) {
+          // Only show task status if there are no artifacts
+          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
           appendMessage(
             'agent progress',
-            messageHtml,
+            statusHtml,
             displayMessageId,
             true,
             validationErrors,
           );
         }
         break;
+      }
       case 'status-update': {
         const statusText = event.status?.message?.parts?.[0]?.text;
         if (statusText) {
@@ -520,23 +937,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       case 'artifact-update':
         event.artifact?.parts?.forEach(p => {
-          let content: string | null = null;
-
-          if ('text' in p && p.text) {
-            content = DOMPurify.sanitize(marked.parse(p.text) as string);
-          } else if ('file' in p && p.file) {
-            const {uri, mimeType} = p.file;
-            const sanitizedMimeType = DOMPurify.sanitize(mimeType);
-            const sanitizedUri = DOMPurify.sanitize(uri);
-            content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
-          } else if ('data' in p && p.data) {
-            content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
-          }
-
-          if (content !== null) {
+          const content = processPart(p);
+          if (content) {
             const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
             const messageHtml = `${kindChip} ${content}`;
-
             appendMessage(
               'agent',
               messageHtml,
@@ -618,12 +1022,31 @@ document.addEventListener('DOMContentLoaded', () => {
     messageId: string,
     isHtml = false,
     validationErrors: string[] = [],
+    attachmentsToShow: Attachment[] = [],
   ) {
     const placeholder = chatMessages.querySelector('.placeholder-text');
     if (placeholder) placeholder.remove();
 
     const messageElement = document.createElement('div');
     messageElement.className = `message ${sender.replace(' ', '-')}`;
+
+    // Add attachments section if there are attachments
+    if (attachmentsToShow.length > 0) {
+      const attachmentsSection = document.createElement('div');
+      attachmentsSection.className = 'message-attachments';
+
+      attachmentsToShow.forEach(attachment => {
+        const badge = document.createElement('div');
+        badge.className = 'attachment-badge';
+
+        const icon = getModalityIcon(attachment.mimeType);
+        badge.innerHTML = `${icon} ${DOMPurify.sanitize(attachment.name)}`;
+
+        attachmentsSection.appendChild(badge);
+      });
+
+      messageElement.appendChild(attachmentsSection);
+    }
 
     const messageContent = document.createElement('div');
     messageContent.className = 'message-content';
@@ -634,7 +1057,9 @@ document.addEventListener('DOMContentLoaded', () => {
       messageContent.textContent = content;
     }
 
-    messageElement.appendChild(messageContent);
+    if (content.trim()) {
+      messageElement.appendChild(messageContent);
+    }
 
     const statusIndicator = document.createElement('span');
     statusIndicator.className = 'validation-status';
