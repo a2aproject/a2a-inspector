@@ -885,8 +885,8 @@ document.addEventListener('DOMContentLoaded', () => {
           // Collect all artifact content
           const allContent: string[] = [];
 
-          event.artifacts.forEach((artifact: any) => {
-            artifact.parts?.forEach((p: any) => {
+          event.artifacts.forEach((artifact) => {
+            artifact.parts?.forEach((p) => {
               const content = processPart(p);
               if (content) allContent.push(content);
             });

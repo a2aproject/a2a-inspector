@@ -327,9 +327,9 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 
     attachments = json_data.get('attachments', [])
 
-    parts: list = []
+    parts: list[TextPart | FilePart] = []
     if message_text:
-        parts.append(TextPart(text=str(message_text)))  # type: ignore[arg-type]
+        parts.append(TextPart(text=message_text))  # type: ignore[arg-type]
 
     for attachment in attachments:
         parts.append(
@@ -364,7 +364,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         async for stream_result in response_stream:
             # Check for duplicate task updates before processing
             if isinstance(stream_result, tuple):
-                task_or_event = stream_result[0]
+                task_or_event = stream_result[1] if stream_result[1] else stream_result[0]
                 result_dict = task_or_event.model_dump(exclude_none=True)
             else:
                 result_dict = stream_result.model_dump(exclude_none=True)
