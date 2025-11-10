@@ -272,6 +272,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             supported_transports=[
                 TransportProtocol.jsonrpc,
                 TransportProtocol.http_json,
+                TransportProtocol.jsonrpc,
+                TransportProtocol.grpc,
             ],
             use_client_preference=True,
             httpx_client=httpx_client,
