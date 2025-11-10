@@ -9,19 +9,20 @@ import httpx
 import socketio
 import validators
 
-from a2a.client import A2ACardResolver, A2AClient
+from a2a.client import A2ACardResolver
+from a2a.client.client import Client, ClientConfig, ClientEvent
+from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
-    JSONRPCErrorResponse,
+    FilePart,
+    FileWithBytes,
     Message,
-    MessageSendConfiguration,
-    MessageSendParams,
     Role,
-    SendMessageRequest,
-    SendMessageResponse,
-    SendStreamingMessageRequest,
-    SendStreamingMessageResponse,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskStatusUpdateEvent,
     TextPart,
+    TransportProtocol,
 )
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -66,7 +67,7 @@ templates = Jinja2Templates(directory='../frontend/public')
 # NOTE: This global dictionary stores state. For a simple inspector tool with
 # transient connections, this is acceptable. For a scalable production service,
 # a more robust state management solution (e.g., Redis) would be required.
-clients: dict[str, tuple[httpx.AsyncClient, A2AClient, AgentCard]] = {}
+clients: dict[str, tuple[httpx.AsyncClient, Client, AgentCard, str]] = {}
 
 
 # ==============================================================================
@@ -84,32 +85,30 @@ async def _emit_debug_log(
 
 
 async def _process_a2a_response(
-    result: SendMessageResponse | SendStreamingMessageResponse,
+    client_event: ClientEvent | Message,
     sid: str,
     request_id: str,
 ) -> None:
     """Processes a response from the A2A client, validates it, and emits events.
 
-    Handles both success and error responses.
-    """
-    if isinstance(result.root, JSONRPCErrorResponse):
-        error_data = result.root.error.model_dump(exclude_none=True)
-        await _emit_debug_log(sid, request_id, 'error', error_data)
-        await sio.emit(
-            'agent_response',
-            {
-                'error': error_data.get('message', 'Unknown error'),
-                'id': request_id,
-            },
-            to=sid,
-        )
-        return
+    This function handles the incoming ClientEvent or Message object,
+    correlating it with the original request using the session ID and request ID.
 
-    # Success case
-    event = result.root.result
+    Args:
+    client_event: The event or message received.
+    sid: The session ID associated with the original request.
+    request_id: The unique ID of the original request.
+    """
     # The response payload 'event' (Task, Message, etc.) may have its own 'id',
     # which can differ from the JSON-RPC request/response 'id'. We prioritize
     # the payload's ID for client-side correlation if it exists.
+
+    event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | Task | Message
+    if isinstance(client_event, tuple):
+        event = client_event[1] if client_event[1] else client_event[0]
+    else:
+        event = client_event
+
     response_id = getattr(event, 'id', request_id)
 
     response_data = event.model_dump(exclude_none=True)
@@ -245,7 +244,7 @@ async def handle_disconnect(sid: str) -> None:
     """Handle the 'disconnect' socket.io event."""
     logger.info(f'Client disconnected: {sid}')
     if sid in clients:
-        httpx_client, _, _ = clients.pop(sid)
+        httpx_client, _, _, _ = clients.pop(sid)
         await httpx_client.aclose()
         logger.info(f'Cleaned up client for {sid}')
 
@@ -268,9 +267,36 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
-        a2a_client = A2AClient(httpx_client, agent_card=card)
-        clients[sid] = (httpx_client, a2a_client, card)
-        await sio.emit('client_initialized', {'status': 'success'}, to=sid)
+
+        a2a_config = ClientConfig(
+            supported_transports=[
+                TransportProtocol.jsonrpc,
+                TransportProtocol.http_json,
+            ],
+            use_client_preference=True,
+            httpx_client=httpx_client,
+        )
+        factory = ClientFactory(a2a_config)
+        a2a_client = factory.create(card)
+        transport_protocol = (
+            card.preferred_transport or TransportProtocol.jsonrpc
+        )
+
+        clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
+
+        input_modes = getattr(card, 'default_input_modes', ['text/plain'])
+        output_modes = getattr(card, 'default_output_modes', ['text/plain'])
+
+        await sio.emit(
+            'client_initialized',
+            {
+                'status': 'success',
+                'transport': str(transport_protocol),
+                'inputModes': input_modes,
+                'outputModes': output_modes,
+            },
+            to=sid,
+        )
     except Exception as e:
         logger.error(
             f'Failed to initialize client for {sid}: {e}', exc_info=True
@@ -297,59 +323,75 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         )
         return
 
-    _, a2a_client, card = clients[sid]
+    _, a2a_client, _, transport = clients[sid]
+
+    attachments = json_data.get('attachments', [])
+
+    parts: list = []
+    if message_text:
+        parts.append(TextPart(text=str(message_text)))  # type: ignore[arg-type]
+
+    for attachment in attachments:
+        parts.append(
+            FilePart(  # type: ignore[arg-type]
+                file=FileWithBytes(
+                    bytes=attachment['data'], mime_type=attachment['mimeType']
+                )
+            )
+        )
 
     message = Message(
         role=Role.user,
-        parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
+        parts=parts,
         message_id=message_id,
         context_id=context_id,
         metadata=metadata,
     )
-    payload = MessageSendParams(
-        message=message,
-        configuration=MessageSendConfiguration(
-            accepted_output_modes=['text/plain', 'video/mp4']
-        ),
-    )
 
-    supports_streaming = (
-        hasattr(card.capabilities, 'streaming')
-        and card.capabilities.streaming is True
-    )
+    debug_request = {
+        'transport': transport,
+        'method': 'message/send',
+        'message': message.model_dump(exclude_none=True),
+    }
+    await _emit_debug_log(sid, message_id, 'request', debug_request)
 
     try:
-        if supports_streaming:
-            stream_request = SendStreamingMessageRequest(
-                id=message_id,
-                method='message/stream',
-                jsonrpc='2.0',
-                params=payload,
-            )
-            await _emit_debug_log(
-                sid,
-                message_id,
-                'request',
-                stream_request.model_dump(exclude_none=True),
-            )
-            response_stream = a2a_client.send_message_streaming(stream_request)
-            async for stream_result in response_stream:
-                await _process_a2a_response(stream_result, sid, message_id)
-        else:
-            send_message_request = SendMessageRequest(
-                id=message_id,
-                method='message/send',
-                jsonrpc='2.0',
-                params=payload,
-            )
-            await _emit_debug_log(
-                sid,
-                message_id,
-                'request',
-                send_message_request.model_dump(exclude_none=True),
-            )
-            send_result = await a2a_client.send_message(send_message_request)
-            await _process_a2a_response(send_result, sid, message_id)
+        response_stream = a2a_client.send_message(message)
+
+        # Track artifact IDs to avoid emitting duplicate task updates
+        seen_artifact_ids: set[str] = set()
+
+        async for stream_result in response_stream:
+            # Check for duplicate task updates before processing
+            if isinstance(stream_result, tuple):
+                task_or_event = (
+                    stream_result[1] if stream_result[1] else stream_result[0]
+                )
+                result_dict = task_or_event.model_dump(exclude_none=True)
+            else:
+                result_dict = stream_result.model_dump(exclude_none=True)
+
+            # Skip task updates with only previously-seen artifacts
+            if result_dict.get('kind') == 'task' and result_dict.get(
+                'artifacts'
+            ):
+                current_artifact_ids = {
+                    artifact.get('artifactId')
+                    for artifact in result_dict.get('artifacts', [])
+                    if artifact.get('artifactId')
+                }
+
+                if current_artifact_ids and current_artifact_ids.issubset(
+                    seen_artifact_ids
+                ):
+                    logger.info(
+                        f'Skipping duplicate task update with same artifacts: {current_artifact_ids}'
+                    )
+                    continue
+
+                seen_artifact_ids.update(current_artifact_ids)
+
+            await _process_a2a_response(stream_result, sid, message_id)
 
     except Exception as e:
         logger.error(f'Failed to send message for sid {sid}', exc_info=True)
