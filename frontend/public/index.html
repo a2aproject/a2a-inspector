@@ -6,13 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>A2A Inspector</title>
     <link rel="stylesheet" href="/static/styles.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" id="highlight-light">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="highlight-dark" disabled>
     <link rel="icon" href="https://a2a-protocol.org/latest/assets/a2a-logo-black.svg">
 </head>
 
 <body>
     <div class="container">
-        <h1>A2A Inspector</h1>
+        <div class="header-container">
+            <h1>A2A Inspector</h1>
+            <label class="theme-toggle" aria-label="Toggle dark mode">
+                <input type="checkbox" id="theme-checkbox">
+                <span class="slider"></span>
+            </label>
+        </div>
         <div class="url-input-container">
             <input type="text" id="agent-card-url" placeholder="Enter Agent Card URL">
         </div>
@@ -44,10 +51,42 @@
             </div>
         </div>
         <div id="chat-container">
-            <h2 class="chat-header">Chat</h2>
+            <div class="chat-header-container">
+                <h2 class="chat-header">Chat</h2>
+                <button id="new-session-btn" class="new-session-btn" disabled>New Session</button>
+            </div>
             <p class="chat-info">
                 Messages from the agent are marked with ✅ (compliant) or ⚠️ (non-compliant). Click any message to view the raw JSON.
             </p>
+            <div class="session-details-container">
+                <div class="session-details-header" id="session-details-toggle">
+                    <span class="toggle-icon">►</span> Session Details
+                </div>
+                <div class="session-details-content" id="session-details-content">
+                    <div class="session-details-info">
+                        <div class="session-info-row">
+                            <strong>Transport:</strong>
+                            <span id="session-transport" class="session-transport">Not connected</span>
+                        </div>
+                        <div class="session-info-row">
+                            <strong>Input Modalities:</strong>
+                            <div id="session-input-modes" class="modalities-list">
+                                <span class="modality-none">Not connected</span>
+                            </div>
+                        </div>
+                        <div class="session-info-row">
+                            <strong>Output Modalities:</strong>
+                            <div id="session-output-modes" class="modalities-list">
+                                <span class="modality-none">Not connected</span>
+                            </div>
+                        </div>
+                        <div class="session-info-row">
+                            <strong>Context ID:</strong>
+                            <code id="session-details" class="session-context-id">No active session</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div id="chat-messages">
                 <p class="placeholder-text">Messages will appear here.</p>
             </div>
@@ -62,9 +101,16 @@
                     <button id="add-metadata-btn">+ Add Metadata</button>
                 </div>
             </div>
-            <div class="chat-input-container">
-                <input type="text" id="chat-input" placeholder="Type a message..." disabled>
-                <button id="send-btn" disabled>Send</button>
+            <div class="chat-input-wrapper">
+                <div id="attachments-preview" class="attachments-preview"></div>
+                <div class="chat-input-container">
+                    <input type="file" id="file-input" class="file-input-hidden" multiple accept="*/*">
+                    <input type="text" id="chat-input" placeholder="Type a message..." disabled>
+                    <button id="attach-btn" class="attach-btn" disabled title="Attach files">
+                        <span class="attach-icon">+</span>
+                    </button>
+                    <button id="send-btn" disabled>Send</button>
+                </div>
             </div>
         </div>
     </div>
