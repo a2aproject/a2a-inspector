@@ -107,6 +107,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const httpHeadersContent = document.getElementById(
     'http-headers-content',
   ) as HTMLElement;
+  const authTypeSelect = document.getElementById(
+    'auth-type',
+  ) as HTMLSelectElement;
+  const authInputsContainer = document.getElementById(
+    'auth-inputs',
+  ) as HTMLElement;
+  const customHeadersSection = document.getElementById(
+    'custom-headers-section',
+  ) as HTMLElement;
   const headersList = document.getElementById('headers-list') as HTMLElement;
   const addHeaderBtn = document.getElementById(
     'add-header-btn',
@@ -234,6 +243,63 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setupToggle(httpHeadersToggle, httpHeadersContent);
   setupToggle(messageMetadataToggle, messageMetadataContent);
+
+  const createAuthInput = (
+    id: string,
+    label: string,
+    type: string,
+    placeholder: string,
+    defaultValue = '',
+  ): string => {
+    return `
+      <div class="auth-input-group">
+        <label for="${id}">${label}</label>
+        <input type="${type}" id="${id}" placeholder="${placeholder}" ${defaultValue ? `value="${defaultValue}"` : ''}>
+      </div>
+    `;
+  };
+
+  const renderAuthInputs = (authType: string) => {
+    authInputsContainer.innerHTML = '';
+
+    switch (authType) {
+      case 'bearer':
+        authInputsContainer.innerHTML = createAuthInput(
+          'bearer-token',
+          'Token',
+          'password',
+          'Enter your bearer token',
+        );
+        break;
+
+      case 'api-key':
+        authInputsContainer.innerHTML = `
+          <div class="auth-input-grid">
+            ${createAuthInput('api-key-header', 'Header Name', 'text', 'e.g., X-API-Key', 'X-API-Key')}
+            ${createAuthInput('api-key-value', 'API Key', 'password', 'Enter your API key')}
+          </div>
+        `;
+        break;
+
+      case 'basic':
+        authInputsContainer.innerHTML =
+          createAuthInput('basic-username', 'Username', 'text', 'Enter username') +
+          createAuthInput('basic-password', 'Password', 'password', 'Enter password');
+        break;
+
+      case 'none':
+      default:
+        // No auth inputs needed
+        break;
+    }
+  };
+
+  authTypeSelect.addEventListener('change', () => {
+    renderAuthInputs(authTypeSelect.value);
+  });
+
+  // Initialize with default auth type
+  renderAuthInputs(authTypeSelect.value);
 
   const sessionDetailsToggle = document.getElementById(
     'session-details-toggle',
@@ -472,13 +538,59 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
+  const getInputValue = (id: string): string => {
+    const input = document.getElementById(id) as HTMLInputElement;
+    return input?.value.trim() || '';
+  };
+
   function getCustomHeaders(): Record<string, string> {
-    return getKeyValuePairs(
+    const headers: Record<string, string> = {};
+    const authType = authTypeSelect.value;
+
+    // Add auth headers based on selected type
+    switch (authType) {
+      case 'bearer': {
+        const token = getInputValue('bearer-token');
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        break;
+      }
+
+      case 'api-key': {
+        const headerName = getInputValue('api-key-header');
+        const value = getInputValue('api-key-value');
+        if (headerName && value) {
+          headers[headerName] = value;
+        }
+        break;
+      }
+
+      case 'basic': {
+        const username = getInputValue('basic-username');
+        const password = getInputValue('basic-password');
+        if (username && password) {
+          const credentials = btoa(`${username}:${password}`);
+          headers['Authorization'] = `Basic ${credentials}`;
+        }
+        break;
+      }
+
+      case 'none':
+      default:
+        break;
+    }
+
+    // Always add custom headers from the header list
+    const customHeaders = getKeyValuePairs(
       headersList,
       '.header-item',
       '.header-name',
       '.header-value',
     );
+    Object.assign(headers, customHeaders);
+
+    return headers;
   }
 
   function getMessageMetadata(): Record<string, string> {
