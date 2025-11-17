@@ -113,9 +113,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const authInputsContainer = document.getElementById(
     'auth-inputs',
   ) as HTMLElement;
-  const customHeadersSection = document.getElementById(
-    'custom-headers-section',
-  ) as HTMLElement;
   const headersList = document.getElementById('headers-list') as HTMLElement;
   const addHeaderBtn = document.getElementById(
     'add-header-btn',
@@ -250,41 +247,67 @@ document.addEventListener('DOMContentLoaded', () => {
     type: string,
     placeholder: string,
     defaultValue = '',
-  ): string => {
-    return `
-      <div class="auth-input-group">
-        <label for="${id}">${label}</label>
-        <input type="${type}" id="${id}" placeholder="${placeholder}" ${defaultValue ? `value="${defaultValue}"` : ''}>
-      </div>
-    `;
+  ): HTMLElement => {
+    const group = document.createElement('div');
+    group.className = 'auth-input-group';
+
+    const labelEl = document.createElement('label');
+    labelEl.htmlFor = id;
+    labelEl.textContent = label;
+
+    const inputEl = document.createElement('input');
+    inputEl.type = type;
+    inputEl.id = id;
+    inputEl.placeholder = placeholder;
+    inputEl.value = defaultValue;
+
+    group.appendChild(labelEl);
+    group.appendChild(inputEl);
+    return group;
   };
 
+  // Auth type change handler
   const renderAuthInputs = (authType: string) => {
-    authInputsContainer.innerHTML = '';
+    authInputsContainer.replaceChildren();
 
     switch (authType) {
       case 'bearer':
-        authInputsContainer.innerHTML = createAuthInput(
-          'bearer-token',
-          'Token',
-          'password',
-          'Enter your bearer token',
+        authInputsContainer.appendChild(
+          createAuthInput(
+            'bearer-token',
+            'Token',
+            'password',
+            'Enter your bearer token',
+          ),
         );
         break;
 
-      case 'api-key':
-        authInputsContainer.innerHTML = `
-          <div class="auth-input-grid">
-            ${createAuthInput('api-key-header', 'Header Name', 'text', 'e.g., X-API-Key', 'X-API-Key')}
-            ${createAuthInput('api-key-value', 'API Key', 'password', 'Enter your API key')}
-          </div>
-        `;
+      case 'api-key': {
+        const grid = document.createElement('div');
+        grid.className = 'auth-input-grid';
+        grid.appendChild(
+          createAuthInput(
+            'api-key-header',
+            'Header Name',
+            'text',
+            'e.g., X-API-Key',
+            'X-API-Key',
+          ),
+        );
+        grid.appendChild(
+          createAuthInput('api-key-value', 'API Key', 'password', 'Enter your API key'),
+        );
+        authInputsContainer.appendChild(grid);
         break;
+      }
 
       case 'basic':
-        authInputsContainer.innerHTML =
-          createAuthInput('basic-username', 'Username', 'text', 'Enter username') +
-          createAuthInput('basic-password', 'Password', 'password', 'Enter password');
+        authInputsContainer.appendChild(
+          createAuthInput('basic-username', 'Username', 'text', 'Enter username'),
+        );
+        authInputsContainer.appendChild(
+          createAuthInput('basic-password', 'Password', 'password', 'Enter password'),
+        );
         break;
 
       case 'none':
