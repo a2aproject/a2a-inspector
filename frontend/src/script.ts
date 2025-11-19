@@ -1,5 +1,5 @@
-import {io} from 'socket.io-client';
-import {marked} from 'marked';
+import { io } from 'socket.io-client';
+import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 // A2A File types (matching spec)
@@ -27,7 +27,7 @@ interface AgentResponseEvent {
   error?: string;
   status?: {
     state: string;
-    message?: {parts?: {text?: string}[]};
+    message?: { parts?: { text?: string }[] };
   };
   artifact?: {
     parts?: ({file?: FileContent} | {text?: string} | {data?: object})[];
@@ -174,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let isResizing = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
-  const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  const messageJsonStore: { [key: string]: AgentResponseEvent } = {};
   const logIdQueue: string[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
@@ -504,8 +504,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function addKeyValueField(
     list: HTMLElement,
-    classes: {item: string; key: string; value: string; removeBtn: string},
-    placeholders: {key: string; value: string},
+    classes: { item: string; key: string; value: string; removeBtn: string },
+    placeholders: { key: string; value: string },
     removeLabel: string,
     key = '',
     value = '',
@@ -529,7 +529,7 @@ document.addEventListener('DOMContentLoaded', () => {
         value: 'header-value',
         removeBtn: 'remove-header-btn',
       },
-      {key: 'Header Name', value: 'Header Value'},
+      { key: 'Header Name', value: 'Header Value' },
       'Remove header',
       name,
       value,
@@ -545,7 +545,7 @@ document.addEventListener('DOMContentLoaded', () => {
         value: 'metadata-value',
         removeBtn: 'remove-metadata-btn',
       },
-      {key: 'Metadata Key', value: 'Metadata Value'},
+      { key: 'Metadata Key', value: 'Metadata Value' },
       'Remove metadata',
       key,
       value,
@@ -717,7 +717,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, sid: socket.id}),
+        body: JSON.stringify({ url: agentCardUrl, sid: socket.id }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -807,8 +807,6 @@ document.addEventListener('DOMContentLoaded', () => {
         attachBtn.disabled = false;
       } else {
         validationErrorsContainer.innerHTML = `<p class="error-text">Error initializing client: ${data.message}</p>`;
-        isConnected = false;
-        updateSessionUI();
       }
     },
   );
@@ -916,6 +914,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageText = chatInput.value;
     if ((messageText.trim() || attachments.length > 0) && !chatInput.disabled) {
       const sanitizedMessage = DOMPurify.sanitize(messageText);
+
+      // Optional but recommended: prevent sending messages that are empty after sanitization
+      if (!sanitizedMessage.trim()) {
+        chatInput.value = '';
+        return;
+      }
 
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       const metadata = getMessageMetadata();
@@ -1087,15 +1091,53 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       case 'artifact-update':
         event.artifact?.parts?.forEach(p => {
-          const content = processPart(p);
-          if (content) {
+          let content: string | null = null;
+          let requiresHtmlRendering = false; // Flag to indicate if content is HTML
+
+          if ('text' in p && p.text) {
+            // Render markdown text
+            content = DOMPurify.sanitize(marked.parse(p.text) as string);
+            requiresHtmlRendering = true;
+          } else if ('file' in p && p.file) {
+            const { uri, mimeType, bytes, name } = p.file;
+
+            // Validate common image mime types instead of sanitizing
+            const allowedImageTypesRegex = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp)$/i; // Added more types and case-insensitivity
+
+            if (bytes && mimeType && allowedImageTypesRegex.test(mimeType)) {
+              // Mime type is valid and allowed, use it directly
+              const imageSrc = `data:${mimeType};base64,${bytes}`;
+              const altText = name ? DOMPurify.sanitize(name) : 'Received Image'; // Sanitize alt text only
+              content = `<img src="${imageSrc}" alt="${altText}" style="max-width: 100%; height: auto;">`;
+              requiresHtmlRendering = true;
+            } else if (uri && mimeType) {
+              // Fallback for non-base64 images or non-allowed/invalid image mime types with a URI
+              const sanitizedMimeType = DOMPurify.sanitize(mimeType); // Sanitize here as it's displayed text
+              const sanitizedUri = DOMPurify.sanitize(uri);
+              content = `File received (${sanitizedMimeType}): <a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer">Open Link</a>`;
+              requiresHtmlRendering = true;
+            } else if (mimeType) {
+              // Handle case where it might be a file with bytes but not a recognized image type
+              const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+              content = `Received file data (${sanitizedMimeType}), cannot display inline.`;
+              // No HTML rendering needed for plain text
+            }
+          } else if ('data' in p && p.data) {
+            // Render JSON data
+            content = `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
+            requiresHtmlRendering = true;
+          }
+
+          if (content !== null) {
             const kindChip = `<span class="kind-chip kind-chip-artifact-update">${event.kind}</span>`;
-            const messageHtml = `${kindChip} ${content}`;
+            // Ensure messageHtml is correctly sanitized if requiresHtmlRendering is true
+            const messageHtml = `${kindChip} ${requiresHtmlRendering ? content : DOMPurify.sanitize(content)}`;
+
             appendMessage(
               'agent',
-              messageHtml,
+              messageHtml, // Pass the potentially HTML content
               displayMessageId,
-              true,
+              requiresHtmlRendering, // Use the flag here
               validationErrors,
             );
           }
@@ -1170,7 +1212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sender: string,
     content: string,
     messageId: string,
-    isHtml = false,
+    isHtml = false, // Default to false if not provided
     validationErrors: string[] = [],
     attachmentsToShow: Attachment[] = [],
   ) {
@@ -1202,9 +1244,10 @@ document.addEventListener('DOMContentLoaded', () => {
     messageContent.className = 'message-content';
 
     if (isHtml) {
-      messageContent.innerHTML = content;
+      // Use DOMPurify again here for safety, even if content was sanitized before
+      messageContent.innerHTML = DOMPurify.sanitize(content);
     } else {
-      messageContent.textContent = content;
+      messageContent.textContent = content; // textContent automatically handles escaping
     }
 
     if (content.trim()) {
@@ -1228,11 +1271,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     messageElement.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName !== 'A') {
+      // Prevent modal opening when clicking on links or images within the message
+      if (target.tagName !== 'A' && target.tagName !== 'IMG') {
         const jsonData =
           sender === 'user'
-            ? rawLogStore[messageId]?.request
-            : messageJsonStore[messageId];
+            ? rawLogStore[messageId]?.request // Assuming user messages correspond to requests
+            : messageJsonStore[messageId]; // Agent messages use the stored response/event
         showJsonInModal(jsonData);
       }
     });
