@@ -475,7 +475,6 @@ document.addEventListener('DOMContentLoaded', () => {
           } else {
             acc[key] = value;
           }
-          acc[key] = value;
         }
         return acc;
       },
