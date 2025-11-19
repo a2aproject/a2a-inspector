@@ -453,7 +453,8 @@ document.addEventListener('DOMContentLoaded', () => {
     itemSelector: string,
     keySelector: string,
     valueSelector: string,
-  ): Record<string, string> {
+    parseJson: boolean = false,
+  ): Record<string, any> {
     const items = list.querySelectorAll(itemSelector);
     return Array.from(items).reduce(
       (acc, item) => {
@@ -464,11 +465,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const key = keyInput?.value.trim();
         const value = valueInput?.value.trim();
         if (key && value) {
+          if (parseJson) {
+            try {
+              acc[key] = JSON.parse(value);
+            } catch {
+              // If not valid JSON, keep as string
+              acc[key] = value;
+            }
+          } else {
+            acc[key] = value;
+          }
           acc[key] = value;
         }
         return acc;
       },
-      {} as Record<string, string>,
+      {} as Record<string, any>,
     );
   }
 
@@ -487,6 +498,7 @@ document.addEventListener('DOMContentLoaded', () => {
       '.metadata-item',
       '.metadata-key',
       '.metadata-value',
+      true, // enable json parsing of metadata
     );
   }
 
