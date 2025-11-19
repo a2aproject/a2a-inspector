@@ -25,8 +25,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python dependencies
         run: uv sync --dev
 
-      - name: Run tests with coverage
+      - name: Install Node.js dependencies
+        run: cd frontend && npm ci
+
+      - name: Run backend tests with coverage
         run: uv run pytest --cov=backend --cov-report=term
+
+      - name: Run frontend tests
+        run: cd frontend && npm test

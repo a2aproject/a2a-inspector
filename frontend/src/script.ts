@@ -107,6 +107,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const httpHeadersContent = document.getElementById(
     'http-headers-content',
   ) as HTMLElement;
+  const authTypeSelect = document.getElementById(
+    'auth-type',
+  ) as HTMLSelectElement;
+  const authInputsContainer = document.getElementById(
+    'auth-inputs',
+  ) as HTMLElement;
   const headersList = document.getElementById('headers-list') as HTMLElement;
   const addHeaderBtn = document.getElementById(
     'add-header-btn',
@@ -234,6 +240,104 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setupToggle(httpHeadersToggle, httpHeadersContent);
   setupToggle(messageMetadataToggle, messageMetadataContent);
+
+  const createAuthInput = (
+    id: string,
+    label: string,
+    type: string,
+    placeholder: string,
+    defaultValue = '',
+  ): HTMLElement => {
+    const group = document.createElement('div');
+    group.className = 'auth-input-group';
+
+    const labelEl = document.createElement('label');
+    labelEl.htmlFor = id;
+    labelEl.textContent = label;
+
+    const inputEl = document.createElement('input');
+    inputEl.type = type;
+    inputEl.id = id;
+    inputEl.placeholder = placeholder;
+    inputEl.value = defaultValue;
+
+    group.appendChild(labelEl);
+    group.appendChild(inputEl);
+    return group;
+  };
+
+  // Auth type change handler
+  const renderAuthInputs = (authType: string) => {
+    authInputsContainer.replaceChildren();
+
+    switch (authType) {
+      case 'bearer':
+        authInputsContainer.appendChild(
+          createAuthInput(
+            'bearer-token',
+            'Token',
+            'password',
+            'Enter your bearer token',
+          ),
+        );
+        break;
+
+      case 'api-key': {
+        const grid = document.createElement('div');
+        grid.className = 'auth-input-grid';
+        grid.appendChild(
+          createAuthInput(
+            'api-key-header',
+            'Header Name',
+            'text',
+            'e.g., X-API-Key',
+            'X-API-Key',
+          ),
+        );
+        grid.appendChild(
+          createAuthInput(
+            'api-key-value',
+            'API Key',
+            'password',
+            'Enter your API key',
+          ),
+        );
+        authInputsContainer.appendChild(grid);
+        break;
+      }
+
+      case 'basic':
+        authInputsContainer.appendChild(
+          createAuthInput(
+            'basic-username',
+            'Username',
+            'text',
+            'Enter username',
+          ),
+        );
+        authInputsContainer.appendChild(
+          createAuthInput(
+            'basic-password',
+            'Password',
+            'password',
+            'Enter password',
+          ),
+        );
+        break;
+
+      case 'none':
+      default:
+        // No auth inputs needed
+        break;
+    }
+  };
+
+  authTypeSelect.addEventListener('change', () => {
+    renderAuthInputs(authTypeSelect.value);
+  });
+
+  // Initialize with default auth type
+  renderAuthInputs(authTypeSelect.value);
 
   const sessionDetailsToggle = document.getElementById(
     'session-details-toggle',
@@ -472,13 +576,59 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
+  const getInputValue = (id: string): string => {
+    const input = document.getElementById(id) as HTMLInputElement;
+    return input?.value.trim() || '';
+  };
+
   function getCustomHeaders(): Record<string, string> {
-    return getKeyValuePairs(
+    const headers: Record<string, string> = {};
+    const authType = authTypeSelect.value;
+
+    // Add auth headers based on selected type
+    switch (authType) {
+      case 'bearer': {
+        const token = getInputValue('bearer-token');
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        break;
+      }
+
+      case 'api-key': {
+        const headerName = getInputValue('api-key-header');
+        const value = getInputValue('api-key-value');
+        if (headerName && value) {
+          headers[headerName] = value;
+        }
+        break;
+      }
+
+      case 'basic': {
+        const username = getInputValue('basic-username');
+        const password = getInputValue('basic-password');
+        if (username && password) {
+          const credentials = btoa(`${username}:${password}`);
+          headers['Authorization'] = `Basic ${credentials}`;
+        }
+        break;
+      }
+
+      case 'none':
+      default:
+        break;
+    }
+
+    // Always add custom headers from the header list
+    const customHeaders = getKeyValuePairs(
       headersList,
       '.header-item',
       '.header-name',
       '.header-value',
     );
+    Object.assign(headers, customHeaders);
+
+    return headers;
   }
 
   function getMessageMetadata(): Record<string, string> {
@@ -885,8 +1035,8 @@ document.addEventListener('DOMContentLoaded', () => {
           // Collect all artifact content
           const allContent: string[] = [];
 
-          event.artifacts.forEach((artifact) => {
-            artifact.parts?.forEach((p) => {
+          event.artifacts.forEach(artifact => {
+            artifact.parts?.forEach(p => {
               const content = processPart(p);
               if (content) allContent.push(content);
             });

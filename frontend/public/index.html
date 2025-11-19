@@ -25,13 +25,31 @@
         </div>
         <div class="http-headers-container">
             <div class="http-headers-header" id="http-headers-toggle">
-                <span class="toggle-icon">►</span> HTTP Headers
+                <span class="toggle-icon">►</span> Authentication & Headers
             </div>
             <div class="http-headers-content" id="http-headers-content">
-                <div id="headers-list">
-                    <!-- Headers will be added here dynamically -->
+                <div class="auth-section">
+                    <label for="auth-type" class="auth-label">Auth Type</label>
+                    <select id="auth-type" class="auth-type-select">
+                        <option value="none">No Auth</option>
+                        <option value="basic">Basic Auth</option>
+                        <option value="bearer">Bearer Token</option>
+                        <option value="api-key">API Key</option>
+                    </select>
+
+                    <div id="auth-inputs" class="auth-inputs">
+                        <!-- Auth inputs will be dynamically added here -->
+                    </div>
                 </div>
-                <button id="add-header-btn">+ Add Header</button>
+
+                <div class="custom-headers-section" id="custom-headers-section">
+                    <div class="section-divider"></div>
+                    <label class="section-label">Custom Headers</label>
+                    <div id="headers-list">
+                        <!-- Headers will be added here dynamically -->
+                    </div>
+                    <button id="add-header-btn">+ Add Header</button>
+                </div>
             </div>
         </div>
         <div class="connect-btn-container">
