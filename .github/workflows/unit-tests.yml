@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    name: Backend (Python ${{ matrix.python-version }}) + Frontend Tests
+    name: Test with Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
 
     strategy:
