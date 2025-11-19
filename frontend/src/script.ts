@@ -491,7 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
-  function getMessageMetadata(): Record<string, string> {
+  function getMessageMetadata(): Record<string, any> {
     return getKeyValuePairs(
       metadataList,
       '.metadata-item',
