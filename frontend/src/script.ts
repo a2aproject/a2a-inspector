@@ -295,7 +295,12 @@ document.addEventListener('DOMContentLoaded', () => {
           ),
         );
         grid.appendChild(
-          createAuthInput('api-key-value', 'API Key', 'password', 'Enter your API key'),
+          createAuthInput(
+            'api-key-value',
+            'API Key',
+            'password',
+            'Enter your API key',
+          ),
         );
         authInputsContainer.appendChild(grid);
         break;
@@ -303,10 +308,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'basic':
         authInputsContainer.appendChild(
-          createAuthInput('basic-username', 'Username', 'text', 'Enter username'),
+          createAuthInput(
+            'basic-username',
+            'Username',
+            'text',
+            'Enter username',
+          ),
         );
         authInputsContainer.appendChild(
-          createAuthInput('basic-password', 'Password', 'password', 'Enter password'),
+          createAuthInput(
+            'basic-password',
+            'Password',
+            'password',
+            'Enter password',
+          ),
         );
         break;
 
@@ -1020,8 +1035,8 @@ document.addEventListener('DOMContentLoaded', () => {
           // Collect all artifact content
           const allContent: string[] = [];
 
-          event.artifacts.forEach((artifact) => {
-            artifact.parts?.forEach((p) => {
+          event.artifacts.forEach(artifact => {
+            artifact.parts?.forEach(p => {
               const content = processPart(p);
               if (content) allContent.push(content);
             });
