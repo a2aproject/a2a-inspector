@@ -955,9 +955,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
 
-  const renderMultimediaContent = (uri: string, mimeType: string): string => {
+  const renderMultimediaContent = (uri: string, mimeType: string, fileName?: string): string => {
     const sanitizedUri = DOMPurify.sanitize(uri);
     const sanitizedMimeType = DOMPurify.sanitize(mimeType);
+    const sanitizedFileName = fileName ? DOMPurify.sanitize(fileName) : 'download';
 
     if (mimeType.startsWith('image/')) {
       return `<div class="media-container"><img src="${sanitizedUri}" alt="Image attachment" class="media-image" /></div>`;
@@ -966,28 +967,28 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (mimeType.startsWith('video/')) {
       return `<div class="media-container"><video controls class="media-video"><source src="${sanitizedUri}" type="${sanitizedMimeType}">Your browser does not support video playback.</video></div>`;
     } else if (mimeType === 'application/pdf') {
-      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">📄 View PDF</a></div>`;
+      return `<div class="media-container"><a href="${sanitizedUri}" download="${sanitizedFileName}" class="file-link">📄 Download PDF (${sanitizedFileName})</a></div>`;
     } else {
-      // For other file types, show a download link
+      // For other file types, show a download link with filename
       const icon = getModalityIcon(mimeType);
-      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">${icon} Download file (${sanitizedMimeType})</a></div>`;
+      return `<div class="media-container"><a href="${sanitizedUri}" download="${sanitizedFileName}" class="file-link">${icon} Download ${sanitizedFileName}</a></div>`;
     }
   };
 
-  const renderBase64Data = (base64Data: string, mimeType: string): string => {
+  const renderBase64Data = (base64Data: string, mimeType: string, fileName?: string): string => {
     const dataUri = `data:${mimeType};base64,${base64Data}`;
-    return renderMultimediaContent(dataUri, mimeType);
+    return renderMultimediaContent(dataUri, mimeType, fileName);
   };
 
   const processPart = (p: any): string | null => {
     if (p.text) {
       return DOMPurify.sanitize(marked.parse(p.text) as string);
     } else if (p.file) {
-      const {uri, bytes, mimeType} = p.file;
+      const {uri, bytes, mimeType, name} = p.file;
       if (bytes && mimeType) {
-        return renderBase64Data(bytes, mimeType);
+        return renderBase64Data(bytes, mimeType, name);
       } else if (uri && mimeType) {
-        return renderMultimediaContent(uri, mimeType);
+        return renderMultimediaContent(uri, mimeType, name);
       }
     } else if (p.data) {
       const dataObj = p.data as any;
@@ -1228,7 +1229,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     messageElement.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName !== 'A') {
+      // Check if the clicked element or any of its parents is an anchor tag
+      if (!target.closest('a')) {
         const jsonData =
           sender === 'user'
             ? rawLogStore[messageId]?.request
