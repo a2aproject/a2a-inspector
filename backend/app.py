@@ -263,6 +263,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             to=sid,
         )
         return
+
+    httpx_client = None
     try:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
@@ -303,6 +305,9 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         logger.error(
             f'Failed to initialize client for {sid}: {e}', exc_info=True
         )
+        # Clean up httpx_client
+        if httpx_client is not None:
+            await httpx_client.aclose()
         await sio.emit(
             'client_initialized', {'status': 'error', 'message': str(e)}, to=sid
         )
@@ -359,40 +364,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 
     try:
         response_stream = a2a_client.send_message(message)
-
-        # Track artifact IDs to avoid emitting duplicate task updates
-        seen_artifact_ids: set[str] = set()
-
         async for stream_result in response_stream:
-            # Check for duplicate task updates before processing
-            if isinstance(stream_result, tuple):
-                task_or_event = (
-                    stream_result[1] if stream_result[1] else stream_result[0]
-                )
-                result_dict = task_or_event.model_dump(exclude_none=True)
-            else:
-                result_dict = stream_result.model_dump(exclude_none=True)
-
-            # Skip task updates with only previously-seen artifacts
-            if result_dict.get('kind') == 'task' and result_dict.get(
-                'artifacts'
-            ):
-                current_artifact_ids = {
-                    artifact.get('artifactId')
-                    for artifact in result_dict.get('artifacts', [])
-                    if artifact.get('artifactId')
-                }
-
-                if current_artifact_ids and current_artifact_ids.issubset(
-                    seen_artifact_ids
-                ):
-                    logger.info(
-                        f'Skipping duplicate task update with same artifacts: {current_artifact_ids}'
-                    )
-                    continue
-
-                seen_artifact_ids.update(current_artifact_ids)
-
             await _process_a2a_response(stream_result, sid, message_id)
 
     except Exception as e:
