@@ -963,12 +963,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chatMessages.innerHTML =
       '<p class="placeholder-text">Send a message to start a new session.</p>';
     chatMessagesStore.length = 0; // Clear stored messages
-    if (exportChatBtn) {
-      exportChatBtn.disabled = true;
-    }
-    if (exportDropdownBtn) {
-      exportDropdownBtn.disabled = true;
-    }
     updateSessionUI();
   };
 
@@ -1245,9 +1239,30 @@ document.addEventListener('DOMContentLoaded', () => {
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
-  function exportChatTranscript() {
+  // Helper function to validate messages before export
+  function validateMessagesForExport(): boolean {
     if (!chatMessagesStore || chatMessagesStore.length === 0) {
       alert('No messages to export.');
+      return false;
+    }
+    return true;
+  }
+
+  // Helper function to download a file
+  function downloadFile(content: string, filename: string, mimeType: string): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportChatTranscript() {
+    if (!validateMessagesForExport()) {
       return;
     }
 
@@ -1464,20 +1479,11 @@ document.addEventListener('DOMContentLoaded', () => {
 </html>`;
 
     // Download HTML file
-    const htmlBlob = new Blob([htmlContent], {type: 'text/html'});
-    const htmlUrl = URL.createObjectURL(htmlBlob);
-    const htmlLink = document.createElement('a');
-    htmlLink.href = htmlUrl;
-    htmlLink.download = `a2a-chat-transcript-${timestamp}.html`;
-    document.body.appendChild(htmlLink);
-    htmlLink.click();
-    document.body.removeChild(htmlLink);
-    URL.revokeObjectURL(htmlUrl);
+    downloadFile(htmlContent, `a2a-chat-transcript-${timestamp}.html`, 'text/html');
   }
 
   function exportChatJSON() {
-    if (!chatMessagesStore || chatMessagesStore.length === 0) {
-      alert('No messages to export.');
+    if (!validateMessagesForExport()) {
       return;
     }
 
@@ -1507,18 +1513,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Create JSON format
     const jsonContent = JSON.stringify(exportData, null, 2);
     const timestamp = generateFilenameTimestamp();
-    const jsonFilename = `a2a-chat-export-${timestamp}.json`;
 
     // Download JSON file
-    const jsonBlob = new Blob([jsonContent], {type: 'application/json'});
-    const jsonUrl = URL.createObjectURL(jsonBlob);
-    const jsonLink = document.createElement('a');
-    jsonLink.href = jsonUrl;
-    jsonLink.download = jsonFilename;
-    document.body.appendChild(jsonLink);
-    jsonLink.click();
-    document.body.removeChild(jsonLink);
-    URL.revokeObjectURL(jsonUrl);
+    downloadFile(jsonContent, `a2a-chat-export-${timestamp}.json`, 'application/json');
   }
 
   function appendMessage(
