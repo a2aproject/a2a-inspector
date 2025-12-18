@@ -91,26 +91,54 @@ export function setupExportDropdown(
   exportJsonBtn: HTMLButtonElement,
   exportChatJSON: () => void,
 ): void {
+  // Handler for clicking outside the dropdown to close it
+  const handleClickOutside = (e: MouseEvent) => {
+    const target = e.target as Node;
+    const dropdownContainer = exportDropdown.closest('.dropdown-container');
+    
+    // Don't close if clicking on the button or within the dropdown container
+    if (
+      dropdownContainer &&
+      (target === exportDropdownBtn ||
+        exportDropdownBtn.contains(target) ||
+        dropdownContainer.contains(target))
+    ) {
+      return;
+    }
+    
+    closeDropdown();
+  };
+
+  // Function to close dropdown and remove the document click listener
+  const closeDropdown = () => {
+    exportDropdown.classList.add('hidden');
+    document.removeEventListener('click', handleClickOutside);
+  };
+
+  // Function to open dropdown and add the document click listener
+  const openDropdown = () => {
+    exportDropdown.classList.remove('hidden');
+    // Add listener immediately - stopPropagation on button click prevents immediate close
+    document.addEventListener('click', handleClickOutside);
+  };
+
   // Dropdown button - toggles dropdown menu
   exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
     if (exportDropdownBtn.disabled) return;
     e.stopPropagation();
-    exportDropdown.classList.toggle('hidden');
-  });
-
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e: MouseEvent) => {
-    const dropdownContainer = exportDropdown.closest('.dropdown-container');
-    if (dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
-      exportDropdown.classList.add('hidden');
+    const isHidden = exportDropdown.classList.contains('hidden');
+    if (isHidden) {
+      openDropdown();
+    } else {
+      closeDropdown();
     }
   });
 
-  // Export JSON
+  // Export JSON - closes dropdown after export
   exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation();
     exportChatJSON();
-    exportDropdown.classList.add('hidden');
+    closeDropdown();
   });
 }
 
@@ -242,7 +270,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Store chat messages for export
   interface ChatMessage {
     sender: string;
-    content: string;
+    content: string; // Content with UI elements (kind chips, etc.)
+    cleanContent: string; // Content without UI elements, suitable for export
     messageId: string;
     timestamp: string;
     validationErrors: string[];
@@ -1102,13 +1131,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const validationErrors = event.validation_errors || [];
 
     if (event.error) {
-      const messageHtml = `<span class="kind-chip kind-chip-error">error</span> Error: ${DOMPurify.sanitize(event.error)}`;
+      const errorText = `Error: ${DOMPurify.sanitize(event.error)}`;
+      const messageHtml = `<span class="kind-chip kind-chip-error">error</span> ${errorText}`;
       appendMessage(
         'agent error',
         messageHtml,
         displayMessageId,
         true,
         validationErrors,
+        [],
+        errorText,
       );
       return;
     }
@@ -1145,17 +1177,22 @@ document.addEventListener('DOMContentLoaded', () => {
               displayMessageId,
               true,
               validationErrors,
+              [],
+              combinedContent,
             );
           }
         } else if (event.status) {
           // Only show task status if there are no artifacts
-          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+          const statusText = `Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> ${statusText}`;
           appendMessage(
             'agent progress',
             statusHtml,
             displayMessageId,
             true,
             validationErrors,
+            [],
+            statusText,
           );
         }
         break;
@@ -1166,13 +1203,16 @@ document.addEventListener('DOMContentLoaded', () => {
           const renderedContent = DOMPurify.sanitize(
             marked.parse(statusText) as string,
           );
-          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> Server responded with: ${renderedContent}`;
+          const cleanContent = `Server responded with: ${renderedContent}`;
+          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> ${cleanContent}`;
           appendMessage(
             'agent progress',
             messageHtml,
             displayMessageId,
             true,
             validationErrors,
+            [],
+            cleanContent,
           );
         }
         break;
@@ -1189,6 +1229,8 @@ document.addEventListener('DOMContentLoaded', () => {
               displayMessageId,
               true,
               validationErrors,
+              [],
+              content,
             );
           }
         });
@@ -1206,6 +1248,8 @@ document.addEventListener('DOMContentLoaded', () => {
             displayMessageId,
             true,
             validationErrors,
+            [],
+            renderedContent,
           );
         }
         break;
@@ -1302,6 +1346,50 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportDate = new Date().toLocaleString();
     const agentUrl = agentCardUrlInput.value.trim() || 'N/A';
 
+    // CSS constants for transcript styling
+    const CSS_COLORS = {
+      primary: '#667eea',
+      primaryDark: '#764ba2',
+      background: '#f5f5f5',
+      white: 'white',
+      lightGray: '#e0e0e0',
+      gray: '#666',
+      lightBg: '#f0f0f0',
+      darkText: '#333',
+      lightText: '#999',
+    };
+
+    const CSS_SIZES = {
+      containerMaxWidth: '800px',
+      containerPadding: '20px',
+      containerBorderRadius: '12px',
+      headerPadding: '24px',
+      headerTitleSize: '24px',
+      headerMetaSize: '14px',
+      chatContainerPadding: '24px',
+      messageGap: '12px',
+      messageMarginBottom: '24px',
+      avatarSize: '40px',
+      avatarFontSize: '20px',
+      bubblePadding: '12px 16px',
+      bubbleBorderRadius: '18px',
+      bubbleCornerRadius: '4px',
+      paragraphMargin: '8px',
+      imageBorderRadius: '8px',
+      codePadding: '8px',
+      codeBorderRadius: '4px',
+      codeFontSize: '12px',
+      timeFontSize: '11px',
+      timeMargin: '4px',
+      badgePadding: '4px 8px',
+      badgeBorderRadius: '12px',
+      badgeFontSize: '12px',
+    };
+
+    const CSS_GRADIENTS = {
+      header: `linear-gradient(135deg, ${CSS_COLORS.primary} 0%, ${CSS_COLORS.primaryDark} 100%)`,
+    };
+
     let htmlContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1316,39 +1404,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #f5f5f5;
-            padding: 20px;
+            background: ${CSS_COLORS.background};
+            padding: ${CSS_SIZES.containerPadding};
             line-height: 1.6;
         }
         .container {
-            max-width: 800px;
+            max-width: ${CSS_SIZES.containerMaxWidth};
             margin: 0 auto;
-            background: white;
-            border-radius: 12px;
+            background: ${CSS_COLORS.white};
+            border-radius: ${CSS_SIZES.containerBorderRadius};
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             overflow: hidden;
         }
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 24px;
+            background: ${CSS_GRADIENTS.header};
+            color: ${CSS_COLORS.white};
+            padding: ${CSS_SIZES.headerPadding};
             text-align: center;
         }
         .header h1 {
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: ${CSS_SIZES.headerTitleSize};
+            margin-bottom: ${CSS_SIZES.paragraphMargin};
         }
         .header .meta {
-            font-size: 14px;
+            font-size: ${CSS_SIZES.headerMetaSize};
             opacity: 0.9;
         }
         .chat-container {
-            padding: 24px;
+            padding: ${CSS_SIZES.chatContainerPadding};
         }
         .message {
-            margin-bottom: 24px;
+            margin-bottom: ${CSS_SIZES.messageMarginBottom};
             display: flex;
-            gap: 12px;
+            gap: ${CSS_SIZES.messageGap};
             animation: fadeIn 0.3s ease-in;
         }
         @keyframes fadeIn {
@@ -1359,22 +1447,22 @@ document.addEventListener('DOMContentLoaded', () => {
             flex-direction: row-reverse;
         }
         .message-avatar {
-            width: 40px;
-            height: 40px;
+            width: ${CSS_SIZES.avatarSize};
+            height: ${CSS_SIZES.avatarSize};
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 20px;
+            font-size: ${CSS_SIZES.avatarFontSize};
             flex-shrink: 0;
         }
         .message.user .message-avatar {
-            background: #667eea;
-            color: white;
+            background: ${CSS_COLORS.primary};
+            color: ${CSS_COLORS.white};
         }
         .message.agent .message-avatar {
-            background: #e0e0e0;
-            color: #666;
+            background: ${CSS_COLORS.lightGray};
+            color: ${CSS_COLORS.gray};
         }
         .message-content {
             flex: 1;
@@ -1384,59 +1472,59 @@ document.addEventListener('DOMContentLoaded', () => {
             text-align: right;
         }
         .message-bubble {
-            padding: 12px 16px;
-            border-radius: 18px;
+            padding: ${CSS_SIZES.bubblePadding};
+            border-radius: ${CSS_SIZES.bubbleBorderRadius};
             display: inline-block;
             word-wrap: break-word;
         }
         .message.user .message-bubble {
-            background: #667eea;
-            color: white;
-            border-bottom-right-radius: 4px;
+            background: ${CSS_COLORS.primary};
+            color: ${CSS_COLORS.white};
+            border-bottom-right-radius: ${CSS_SIZES.bubbleCornerRadius};
         }
         .message.agent .message-bubble {
-            background: #f0f0f0;
-            color: #333;
-            border-bottom-left-radius: 4px;
+            background: ${CSS_COLORS.lightBg};
+            color: ${CSS_COLORS.darkText};
+            border-bottom-left-radius: ${CSS_SIZES.bubbleCornerRadius};
         }
         .message-bubble p {
-            margin: 0 0 8px 0;
+            margin: 0 0 ${CSS_SIZES.paragraphMargin} 0;
         }
         .message-bubble p:last-child {
             margin-bottom: 0;
         }
         .message-bubble img {
             max-width: 100%;
-            border-radius: 8px;
-            margin-top: 8px;
+            border-radius: ${CSS_SIZES.imageBorderRadius};
+            margin-top: ${CSS_SIZES.paragraphMargin};
         }
         .message-bubble pre {
             background: rgba(0,0,0,0.05);
-            padding: 8px;
-            border-radius: 4px;
+            padding: ${CSS_SIZES.codePadding};
+            border-radius: ${CSS_SIZES.codeBorderRadius};
             overflow-x: auto;
-            font-size: 12px;
+            font-size: ${CSS_SIZES.codeFontSize};
         }
         .message-time {
-            font-size: 11px;
-            color: #999;
-            margin-top: 4px;
-            padding: 0 4px;
+            font-size: ${CSS_SIZES.timeFontSize};
+            color: ${CSS_COLORS.lightText};
+            margin-top: ${CSS_SIZES.timeMargin};
+            padding: 0 ${CSS_SIZES.timeMargin};
         }
         .message.user .message-time {
             text-align: right;
         }
         .attachments {
-            margin-top: 8px;
+            margin-top: ${CSS_SIZES.paragraphMargin};
             display: flex;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: ${CSS_SIZES.timeMargin};
         }
         .attachment-badge {
             background: rgba(255,255,255,0.2);
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
+            padding: ${CSS_SIZES.badgePadding};
+            border-radius: ${CSS_SIZES.badgeBorderRadius};
+            font-size: ${CSS_SIZES.badgeFontSize};
         }
         .message.agent .attachment-badge {
             background: rgba(0,0,0,0.1);
@@ -1455,43 +1543,41 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="chat-container">
 `;
 
-    filteredMessages.forEach(msg => {
+    // Generate HTML for each message using map() for better performance
+    const messageHtmls = filteredMessages.map(msg => {
       const isUser = msg.sender === 'user';
       const timestamp = new Date(msg.timestamp).toLocaleTimeString();
       const avatar = isUser ? '👤' : '🤖';
       
-      // Extract text content from HTML
-      let content = msg.content;
-      // Remove kind chips and other UI elements
-      content = content.replace(/<span class="kind-chip[^"]*">[^<]*<\/span>\s*/g, '');
-      
+      // Use cleanContent (content without UI elements like kind chips)
       // Sanitize content for HTML export (already contains HTML from marked)
-      const sanitizedContent = DOMPurify.sanitize(content, {
+      const sanitizedContent = DOMPurify.sanitize(msg.cleanContent, {
         ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'img', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
         ALLOWED_ATTR: ['src', 'alt', 'href', 'target', 'rel', 'class'],
       });
       
-      htmlContent += `
+      const attachmentsHtml = msg.attachments.length > 0
+        ? `<div class="attachments">
+            ${msg.attachments.map(att => 
+              `<span class="attachment-badge">📎 ${DOMPurify.sanitize(att.name)}</span>`
+            ).join('')}
+        </div>`
+        : '';
+      
+      return `
             <div class="message ${isUser ? 'user' : 'agent'}">
                 <div class="message-avatar">${avatar}</div>
                 <div class="message-content">
                     <div class="message-bubble">
                         ${sanitizedContent}
-                        ${msg.attachments.length > 0 ? `
-                        <div class="attachments">
-                            ${msg.attachments.map(att => 
-                              `<span class="attachment-badge">📎 ${DOMPurify.sanitize(att.name)}</span>`
-                            ).join('')}
-                        </div>
-                        ` : ''}
+                        ${attachmentsHtml}
                     </div>
                     <div class="message-time">${timestamp}</div>
                 </div>
-            </div>
-`;
+            </div>`;
     });
 
-    htmlContent += `
+    htmlContent += messageHtmls.join('') + `
         </div>
     </div>
 </body>
@@ -1544,6 +1630,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isHtml = false,
     validationErrors: string[] = [],
     attachmentsToShow: Attachment[] = [],
+    cleanContent?: string, // Content without UI elements (kind chips, etc.)
   ) {
     const placeholder = chatMessages.querySelector('.placeholder-text');
     if (placeholder) placeholder.remove();
@@ -1612,9 +1699,11 @@ document.addEventListener('DOMContentLoaded', () => {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     // Store message for export
+    // Use provided cleanContent or fall back to content (for backward compatibility)
     const chatMessage: ChatMessage = {
       sender,
       content,
+      cleanContent: cleanContent ?? content,
       messageId,
       timestamp: new Date().toISOString(),
       validationErrors,

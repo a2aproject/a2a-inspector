@@ -152,6 +152,7 @@ describe('Export Feature', () => {
       return {
         sender,
         content,
+        cleanContent: content, // For tests, cleanContent is same as content
         messageId: `msg-${Date.now()}-${Math.random()}`,
         timestamp: new Date().toISOString(),
         validationErrors: [] as string[],
@@ -224,6 +225,7 @@ describe('Export Feature', () => {
       return {
         sender,
         content,
+        cleanContent: content, // For tests, cleanContent is same as content
         messageId: `msg-${Date.now()}-${Math.random()}`,
         timestamp: new Date().toISOString(),
         validationErrors: [] as string[],
