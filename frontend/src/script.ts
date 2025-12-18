@@ -693,14 +693,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Close dropdown when clicking outside
   document.addEventListener('click', (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (
-      !exportDropdown.contains(target) &&
-      target !== exportDropdownBtn &&
-      !exportDropdownBtn.contains(target) &&
-      target !== exportChatBtn &&
-      !exportChatBtn.contains(target)
-    ) {
+    const dropdownContainer = exportDropdown.closest('.dropdown-container');
+    if (dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
       exportDropdown.classList.add('hidden');
     }
   });
