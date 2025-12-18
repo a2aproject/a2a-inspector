@@ -161,6 +161,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const newSessionBtn = document.getElementById(
     'new-session-btn',
   ) as HTMLButtonElement;
+  const exportChatBtn = document.getElementById(
+    'export-chat-btn',
+  ) as HTMLButtonElement;
+  const exportDropdownBtn = document.getElementById(
+    'export-dropdown-btn',
+  ) as HTMLButtonElement;
+  const exportDropdown = document.getElementById(
+    'export-dropdown',
+  ) as HTMLElement;
+  const exportJsonBtn = document.getElementById(
+    'export-json-btn',
+  ) as HTMLButtonElement;
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
   const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement;
   const attachmentsPreview = document.getElementById(
@@ -176,6 +188,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
   const logIdQueue: string[] = [];
+  // Store chat messages for export
+  interface ChatMessage {
+    sender: string;
+    content: string;
+    messageId: string;
+    timestamp: string;
+    validationErrors: string[];
+    attachments: Attachment[];
+    rawJson?: any;
+  }
+  const chatMessagesStore: ChatMessage[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
 
@@ -655,6 +678,40 @@ document.addEventListener('DOMContentLoaded', () => {
     resetSession();
   });
 
+  // Main Save button - exports transcript directly
+  exportChatBtn.addEventListener('click', () => {
+    if (exportChatBtn.disabled) return;
+    exportChatTranscript();
+  });
+
+  // Dropdown button - toggles dropdown menu
+  exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
+    if (exportDropdownBtn.disabled) return;
+    e.stopPropagation();
+    exportDropdown.classList.toggle('hidden');
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (
+      !exportDropdown.contains(target) &&
+      target !== exportDropdownBtn &&
+      !exportDropdownBtn.contains(target) &&
+      target !== exportChatBtn &&
+      !exportChatBtn.contains(target)
+    ) {
+      exportDropdown.classList.add('hidden');
+    }
+  });
+
+  // Export JSON
+  exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    exportChatJSON();
+    exportDropdown.classList.add('hidden');
+  });
+
   modalCloseBtn.addEventListener('click', () =>
     jsonModal.classList.add('hidden'),
   );
@@ -864,6 +921,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (newSessionBtn) {
         newSessionBtn.disabled = true;
       }
+      if (exportChatBtn) {
+        exportChatBtn.disabled = chatMessagesStore.length === 0;
+      }
+      if (exportDropdownBtn) {
+        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
+      }
     } else if (contextId) {
       if (sessionDetails) {
         sessionDetails.textContent = contextId;
@@ -871,12 +934,24 @@ document.addEventListener('DOMContentLoaded', () => {
       if (newSessionBtn) {
         newSessionBtn.disabled = false;
       }
+      if (exportChatBtn) {
+        exportChatBtn.disabled = chatMessagesStore.length === 0;
+      }
+      if (exportDropdownBtn) {
+        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
+      }
     } else {
       if (sessionDetails) {
         sessionDetails.textContent = 'No active session';
       }
       if (newSessionBtn) {
         newSessionBtn.disabled = true;
+      }
+      if (exportChatBtn) {
+        exportChatBtn.disabled = chatMessagesStore.length === 0;
+      }
+      if (exportDropdownBtn) {
+        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
       }
 
       const placeholder = chatMessages.querySelector('.placeholder-text');
@@ -890,6 +965,13 @@ document.addEventListener('DOMContentLoaded', () => {
     contextId = null;
     chatMessages.innerHTML =
       '<p class="placeholder-text">Send a message to start a new session.</p>';
+    chatMessagesStore.length = 0; // Clear stored messages
+    if (exportChatBtn) {
+      exportChatBtn.disabled = true;
+    }
+    if (exportDropdownBtn) {
+      exportDropdownBtn.disabled = true;
+    }
     updateSessionUI();
   };
 
@@ -1166,6 +1248,282 @@ document.addEventListener('DOMContentLoaded', () => {
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
+  function exportChatTranscript() {
+    if (!chatMessagesStore || chatMessagesStore.length === 0) {
+      alert('No messages to export.');
+      return;
+    }
+
+    // Filter: only user messages and artifact-update responses
+    const filteredMessages = chatMessagesStore.filter(msg => {
+      if (msg.sender === 'user') return true;
+      if (msg.rawJson && msg.rawJson.kind === 'artifact-update') return true;
+      return false;
+    });
+
+    if (filteredMessages.length === 0) {
+      alert('No chat transcript to export (no user messages or artifact updates found).');
+      return;
+    }
+
+    // Create beautiful HTML chat transcript
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const exportDate = new Date().toLocaleString();
+    const agentUrl = agentCardUrlInput.value.trim() || 'N/A';
+
+    let htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A2A Chat Transcript</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 24px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        .header .meta {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .chat-container {
+            padding: 24px;
+        }
+        .message {
+            margin-bottom: 24px;
+            display: flex;
+            gap: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+        .message.user .message-avatar {
+            background: #667eea;
+            color: white;
+        }
+        .message.agent .message-avatar {
+            background: #e0e0e0;
+            color: #666;
+        }
+        .message-content {
+            flex: 1;
+            max-width: 70%;
+        }
+        .message.user .message-content {
+            text-align: right;
+        }
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 18px;
+            display: inline-block;
+            word-wrap: break-word;
+        }
+        .message.user .message-bubble {
+            background: #667eea;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .message.agent .message-bubble {
+            background: #f0f0f0;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+        .message-bubble p {
+            margin: 0 0 8px 0;
+        }
+        .message-bubble p:last-child {
+            margin-bottom: 0;
+        }
+        .message-bubble img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .message-bubble pre {
+            background: rgba(0,0,0,0.05);
+            padding: 8px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .message-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+        .message.user .message-time {
+            text-align: right;
+        }
+        .attachments {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .attachment-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .message.agent .attachment-badge {
+            background: rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💬 A2A Chat Transcript</h1>
+            <div class="meta">
+                <div>Exported: ${exportDate}</div>
+                <div>Agent: ${agentUrl}</div>
+            </div>
+        </div>
+        <div class="chat-container">
+`;
+
+    filteredMessages.forEach(msg => {
+      const isUser = msg.sender === 'user';
+      const timestamp = new Date(msg.timestamp).toLocaleTimeString();
+      const avatar = isUser ? '👤' : '🤖';
+      
+      // Extract text content from HTML
+      let content = msg.content;
+      // Remove kind chips and other UI elements
+      content = content.replace(/<span class="kind-chip[^"]*">[^<]*<\/span>\s*/g, '');
+      
+      // Sanitize content for HTML export (already contains HTML from marked)
+      const sanitizedContent = DOMPurify.sanitize(content, {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'img', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        ALLOWED_ATTR: ['src', 'alt', 'href', 'target', 'rel', 'class'],
+      });
+      
+      htmlContent += `
+            <div class="message ${isUser ? 'user' : 'agent'}">
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-content">
+                    <div class="message-bubble">
+                        ${sanitizedContent}
+                        ${msg.attachments.length > 0 ? `
+                        <div class="attachments">
+                            ${msg.attachments.map(att => 
+                              `<span class="attachment-badge">📎 ${DOMPurify.sanitize(att.name)}</span>`
+                            ).join('')}
+                        </div>
+                        ` : ''}
+                    </div>
+                    <div class="message-time">${timestamp}</div>
+                </div>
+            </div>
+`;
+    });
+
+    htmlContent += `
+        </div>
+    </div>
+</body>
+</html>`;
+
+    // Download HTML file
+    const htmlBlob = new Blob([htmlContent], {type: 'text/html'});
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+    const htmlLink = document.createElement('a');
+    htmlLink.href = htmlUrl;
+    htmlLink.download = `a2a-chat-transcript-${timestamp}.html`;
+    document.body.appendChild(htmlLink);
+    htmlLink.click();
+    document.body.removeChild(htmlLink);
+    URL.revokeObjectURL(htmlUrl);
+  }
+
+  function exportChatJSON() {
+    if (!chatMessagesStore || chatMessagesStore.length === 0) {
+      alert('No messages to export.');
+      return;
+    }
+
+    // Create export data
+    const exportData = {
+      metadata: {
+        exportedAt: new Date().toISOString(),
+        contextId: contextId || null,
+        totalMessages: chatMessagesStore.length,
+        agentUrl: agentCardUrlInput.value.trim() || null,
+      },
+      messages: chatMessagesStore.map(msg => ({
+        sender: msg.sender,
+        content: msg.content,
+        messageId: msg.messageId,
+        timestamp: msg.timestamp,
+        validationErrors: msg.validationErrors,
+        attachments: msg.attachments.map(att => ({
+          name: att.name,
+          size: att.size,
+          mimeType: att.mimeType,
+        })),
+        rawJson: msg.rawJson,
+      })),
+    };
+
+    // Create JSON format
+    const jsonContent = JSON.stringify(exportData, null, 2);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const jsonFilename = `a2a-chat-export-${timestamp}.json`;
+
+    // Download JSON file
+    const jsonBlob = new Blob([jsonContent], {type: 'application/json'});
+    const jsonUrl = URL.createObjectURL(jsonBlob);
+    const jsonLink = document.createElement('a');
+    jsonLink.href = jsonUrl;
+    jsonLink.download = jsonFilename;
+    document.body.appendChild(jsonLink);
+    jsonLink.click();
+    document.body.removeChild(jsonLink);
+    URL.revokeObjectURL(jsonUrl);
+  }
+
   function appendMessage(
     sender: string,
     content: string,
@@ -1239,5 +1597,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chatMessages.appendChild(messageElement);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Store message for export
+    const chatMessage: ChatMessage = {
+      sender,
+      content: isHtml ? content : content,
+      messageId,
+      timestamp: new Date().toISOString(),
+      validationErrors,
+      attachments: attachmentsToShow,
+      rawJson:
+        sender === 'user'
+          ? rawLogStore[messageId]?.request
+          : messageJsonStore[messageId],
+    };
+    chatMessagesStore.push(chatMessage);
+
+    // Enable export button if there are messages
+    if (exportChatBtn) {
+      exportChatBtn.disabled = false;
+    }
+    if (exportDropdownBtn) {
+      exportDropdownBtn.disabled = false;
+    }
   }
 });
