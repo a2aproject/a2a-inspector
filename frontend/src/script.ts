@@ -1585,7 +1585,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Store message for export
     const chatMessage: ChatMessage = {
       sender,
-      content: isHtml ? content : content,
+      content,
       messageId,
       timestamp: new Date().toISOString(),
       validationErrors,
