@@ -4,6 +4,7 @@
 
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
 import {fireEvent} from '@testing-library/dom';
+import {generateFilenameTimestamp} from '../src/script';
 
 describe('Export Feature', () => {
   let exportChatBtn: HTMLButtonElement;
@@ -360,11 +361,6 @@ describe('Export Feature', () => {
   });
 
   describe('generateFilenameTimestamp', () => {
-    // We need to access the function from the script, but since it's not exported,
-    // we'll test it by creating our own implementation that matches the logic
-    function generateFilenameTimestamp(): string {
-      return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-    }
 
     it('generates timestamp in correct format', () => {
       const timestamp = generateFilenameTimestamp();

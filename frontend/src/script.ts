@@ -63,6 +63,15 @@ declare global {
   }
 }
 
+/**
+ * Generate a clean timestamp string for filenames.
+ * Converts ISO string (e.g., "2023-10-27T10:30:00.123Z") to "2023-10-27T10-30-00"
+ * Uses slice(0, 19) to safely extract the date-time portion before milliseconds.
+ */
+export function generateFilenameTimestamp(): string {
+  return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
@@ -1231,15 +1240,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(processLogQueue, 0);
     debugContent.scrollTop = debugContent.scrollHeight;
   });
-
-  /**
-   * Generate a clean timestamp string for filenames.
-   * Converts ISO string (e.g., "2023-10-27T10:30:00.123Z") to "2023-10-27T10-30-00"
-   * Uses slice(0, 19) to safely extract the date-time portion before milliseconds.
-   */
-  function generateFilenameTimestamp(): string {
-    return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-  }
 
   function exportChatTranscript() {
     if (!chatMessagesStore || chatMessagesStore.length === 0) {
