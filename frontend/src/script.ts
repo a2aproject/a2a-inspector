@@ -678,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resetSession();
   });
 
-  // Main Save button - exports transcript directly
+  // Main Export to HTML button - exports transcript directly
   exportChatBtn.addEventListener('click', () => {
     if (exportChatBtn.disabled) return;
     exportChatTranscript();
