@@ -915,24 +915,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (newSessionBtn) {
         newSessionBtn.disabled = true;
       }
-      if (exportChatBtn) {
-        exportChatBtn.disabled = chatMessagesStore.length === 0;
-      }
-      if (exportDropdownBtn) {
-        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
-      }
     } else if (contextId) {
       if (sessionDetails) {
         sessionDetails.textContent = contextId;
       }
       if (newSessionBtn) {
         newSessionBtn.disabled = false;
-      }
-      if (exportChatBtn) {
-        exportChatBtn.disabled = chatMessagesStore.length === 0;
-      }
-      if (exportDropdownBtn) {
-        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
       }
     } else {
       if (sessionDetails) {
@@ -941,17 +929,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (newSessionBtn) {
         newSessionBtn.disabled = true;
       }
-      if (exportChatBtn) {
-        exportChatBtn.disabled = chatMessagesStore.length === 0;
-      }
-      if (exportDropdownBtn) {
-        exportDropdownBtn.disabled = chatMessagesStore.length === 0;
-      }
 
       const placeholder = chatMessages.querySelector('.placeholder-text');
       if (placeholder) {
         placeholder.textContent = 'Send a message to start a new session.';
       }
+    }
+
+    // Update export buttons based on message availability (independent of session state)
+    if (exportChatBtn) {
+      exportChatBtn.disabled = chatMessagesStore.length === 0;
+    }
+    if (exportDropdownBtn) {
+      exportDropdownBtn.disabled = chatMessagesStore.length === 0;
     }
   };
 
