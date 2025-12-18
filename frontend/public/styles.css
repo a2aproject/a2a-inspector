@@ -1141,25 +1141,33 @@ body.dark-mode .loading-spinner {
     min-width: 24px;
 }
 
+.export-chat-btn:hover:not(:disabled),
 .export-dropdown-btn:hover:not(:disabled) {
     background-color: #35a372;
 }
 
+.export-chat-btn:disabled,
 .export-dropdown-btn:disabled {
     background-color: #e4e6eb;
     color: #8a8d91;
     cursor: not-allowed;
+}
+
+.export-dropdown-btn:disabled {
     border-right: none;
 }
 
+body.dark-mode .export-chat-btn,
 body.dark-mode .export-dropdown-btn {
     background-color: #42b883;
 }
 
+body.dark-mode .export-chat-btn:hover:not(:disabled),
 body.dark-mode .export-dropdown-btn:hover:not(:disabled) {
     background-color: #35a372;
 }
 
+body.dark-mode .export-chat-btn:disabled,
 body.dark-mode .export-dropdown-btn:disabled {
     background-color: #3a3b3c;
     color: #8a8d91;
@@ -1211,29 +1219,6 @@ body.dark-mode .dropdown-item {
 
 body.dark-mode .dropdown-item:hover {
     background-color: #3a3b3c;
-}
-
-.export-chat-btn:hover:not(:disabled) {
-    background-color: #35a372;
-}
-
-.export-chat-btn:disabled {
-    background-color: #e4e6eb;
-    color: #8a8d91;
-    cursor: not-allowed;
-}
-
-body.dark-mode .export-chat-btn {
-    background-color: #42b883;
-}
-
-body.dark-mode .export-chat-btn:hover:not(:disabled) {
-    background-color: #35a372;
-}
-
-body.dark-mode .export-chat-btn:disabled {
-    background-color: #3a3b3c;
-    color: #8a8d91;
 }
 
 .session-details-container {
