@@ -67,9 +67,13 @@ declare global {
  * Generate a clean timestamp string for filenames.
  * Converts ISO string (e.g., "2023-10-27T10:30:00.123Z") to "2023-10-27T10-30-00"
  * Uses slice(0, 19) to safely extract the date-time portion before milliseconds.
+ *
+ * @param date - Optional Date object. Defaults to current date/time if not provided.
+ * @returns Timestamp string in format YYYY-MM-DDTHH-MM-SS
  */
-export function generateFilenameTimestamp(): string {
-  return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+export function generateFilenameTimestamp(date?: Date): string {
+  const dateToUse = date ?? new Date();
+  return dateToUse.toISOString().slice(0, 19).replace(/:/g, '-');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
