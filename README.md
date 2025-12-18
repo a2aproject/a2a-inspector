@@ -10,6 +10,9 @@ The application is built with a FastAPI backend and a TypeScript frontend.
 - **View Agent Card:** Automatically fetches and displays the agent's card.
 - **Spec Compliance Checks:** Performs basic validation on the agent card to ensure it adheres to the A2A specification.
 - **Live Chat:** A chat interface to send and receive messages with the connected agent.
+- **Chat Export:** Export chat conversations in two formats:
+  - **Export to HTML:** Clean, readable chat transcript showing only user messages and artifact-update responses
+  - **Export to JSON:** Full JSON export with all messages, metadata, validation errors, and raw data
 - **Debug Console:** A slide-out console shows the raw JSON-RPC 2.0 messages sent and received between the inspector and the agent server.
 
 ## Prerequisites
