@@ -361,111 +361,56 @@ describe('Export Feature', () => {
   });
 
   describe('generateFilenameTimestamp', () => {
-    it('generates timestamp in correct format', () => {
+    it('generates timestamp for standard date', () => {
       const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      // Should match pattern: YYYY-MM-DDTHH-MM-SS
-      expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
-      expect(timestamp).toBe('2023-10-27T10-30-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
     });
 
-    it('removes milliseconds and timezone', () => {
-      const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      // Should not contain milliseconds (no dots) or Z
-      expect(timestamp).not.toContain('.');
-      expect(timestamp).not.toContain('Z');
-      expect(timestamp).toBe('2023-10-27T10-30-00');
-    });
-
-    it('replaces colons with dashes', () => {
-      const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      // Should not contain colons
-      expect(timestamp).not.toContain(':');
-      // Should contain dashes in time portion
-      expect(timestamp).toContain('-');
-      expect(timestamp).toBe('2023-10-27T10-30-00');
-    });
-
-    it('produces consistent length', () => {
-      const testDate1 = new Date('2023-01-01T00:00:00.000Z');
-      const testDate2 = new Date('2023-12-31T23:59:59.999Z');
-      const timestamp1 = generateFilenameTimestamp(testDate1);
-      const timestamp2 = generateFilenameTimestamp(testDate2);
-      // Should always be 19 characters (YYYY-MM-DDTHH-MM-SS)
-      expect(timestamp1.length).toBe(19);
-      expect(timestamp2.length).toBe(19);
-    });
-
-    it('handles different times correctly', () => {
-      const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      expect(timestamp).toBe('2023-10-27T10-30-00');
-    });
-
-    it('handles midnight correctly', () => {
+    it('handles midnight', () => {
       const testDate = new Date('2023-01-01T00:00:00.000Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      expect(timestamp).toBe('2023-01-01T00-00-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-01-01T00-00-00');
     });
 
-    it('handles end of day correctly', () => {
+    it('handles end of day', () => {
       const testDate = new Date('2023-12-31T23:59:59.999Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      expect(timestamp).toBe('2023-12-31T23-59-59');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-12-31T23-59-59');
     });
 
     it('handles single digit months and days', () => {
       const testDate = new Date('2023-01-05T09:05:03.456Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      expect(timestamp).toBe('2023-01-05T09-05-03');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-01-05T09-05-03');
     });
 
     it('handles single digit hours, minutes, seconds', () => {
       const testDate = new Date('2023-06-15T05:07:09.789Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      expect(timestamp).toBe('2023-06-15T05-07-09');
-    });
-
-    it('produces valid filename-safe characters', () => {
-      const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp = generateFilenameTimestamp(testDate);
-      // Should only contain digits, dashes, and T
-      expect(timestamp).toMatch(/^[\d-T]+$/);
-      expect(timestamp).toBe('2023-10-27T10-30-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-06-15T05-07-09');
     });
 
     it('is deterministic for same moment', () => {
       const testDate = new Date('2023-10-27T10:30:00.123Z');
-      const timestamp1 = generateFilenameTimestamp(testDate);
-      const timestamp2 = generateFilenameTimestamp(testDate);
-      expect(timestamp1).toBe(timestamp2);
-      expect(timestamp1).toBe('2023-10-27T10-30-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
     });
 
     it('defaults to current date when no parameter provided', () => {
       const timestamp = generateFilenameTimestamp();
-      // Should match pattern and be 19 characters
-      expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
       expect(timestamp.length).toBe(19);
-      // Should not contain milliseconds or timezone
-      expect(timestamp).not.toContain('.');
-      expect(timestamp).not.toContain('Z');
-      expect(timestamp).not.toContain(':');
+      expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
     });
 
-    it('handles various edge cases', () => {
-      // Test noon
+    it('handles noon', () => {
       expect(generateFilenameTimestamp(new Date('2023-06-15T12:00:00.000Z'))).toBe('2023-06-15T12-00-00');
-      
-      // Test one second before midnight
+    });
+
+    it('handles one second before midnight', () => {
       expect(generateFilenameTimestamp(new Date('2023-12-31T23:59:58.999Z'))).toBe('2023-12-31T23-59-58');
-      
-      // Test leap year date
+    });
+
+    it('handles leap year date', () => {
       expect(generateFilenameTimestamp(new Date('2024-02-29T14:30:45.123Z'))).toBe('2024-02-29T14-30-45');
-      
-      // Test year boundary
+    });
+
+    it('handles year boundary', () => {
       expect(generateFilenameTimestamp(new Date('2023-12-31T23:59:59.999Z'))).toBe('2023-12-31T23-59-59');
       expect(generateFilenameTimestamp(new Date('2024-01-01T00:00:00.000Z'))).toBe('2024-01-01T00-00-00');
     });
