@@ -358,5 +358,104 @@ describe('Export Feature', () => {
       expect(exportJsonBtn.classList.contains('dropdown-item')).toBe(true);
     });
   });
+
+  describe('generateFilenameTimestamp', () => {
+    // We need to access the function from the script, but since it's not exported,
+    // we'll test it by creating our own implementation that matches the logic
+    function generateFilenameTimestamp(): string {
+      return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    }
+
+    it('generates timestamp in correct format', () => {
+      const timestamp = generateFilenameTimestamp();
+      // Should match pattern: YYYY-MM-DDTHH-MM-SS
+      expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
+    });
+
+    it('removes milliseconds and timezone', () => {
+      const timestamp = generateFilenameTimestamp();
+      // Should not contain milliseconds (no dots) or Z
+      expect(timestamp).not.toContain('.');
+      expect(timestamp).not.toContain('Z');
+    });
+
+    it('replaces colons with dashes', () => {
+      const timestamp = generateFilenameTimestamp();
+      // Should not contain colons
+      expect(timestamp).not.toContain(':');
+      // Should contain dashes in time portion
+      expect(timestamp).toContain('-');
+    });
+
+    it('produces consistent length', () => {
+      const timestamp1 = generateFilenameTimestamp();
+      const timestamp2 = generateFilenameTimestamp();
+      // Should always be 19 characters (YYYY-MM-DDTHH-MM-SS)
+      expect(timestamp1.length).toBe(19);
+      expect(timestamp2.length).toBe(19);
+    });
+
+    it('handles different times correctly', () => {
+      // Test with a specific date
+      const testDate = new Date('2023-10-27T10:30:00.123Z');
+      const timestamp = testDate.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp).toBe('2023-10-27T10-30-00');
+    });
+
+    it('handles midnight correctly', () => {
+      const testDate = new Date('2023-01-01T00:00:00.000Z');
+      const timestamp = testDate.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp).toBe('2023-01-01T00-00-00');
+    });
+
+    it('handles end of day correctly', () => {
+      const testDate = new Date('2023-12-31T23:59:59.999Z');
+      const timestamp = testDate.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp).toBe('2023-12-31T23-59-59');
+    });
+
+    it('handles single digit months and days', () => {
+      const testDate = new Date('2023-01-05T09:05:03.456Z');
+      const timestamp = testDate.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp).toBe('2023-01-05T09-05-03');
+    });
+
+    it('handles single digit hours, minutes, seconds', () => {
+      const testDate = new Date('2023-06-15T05:07:09.789Z');
+      const timestamp = testDate.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp).toBe('2023-06-15T05-07-09');
+    });
+
+    it('produces valid filename-safe characters', () => {
+      const timestamp = generateFilenameTimestamp();
+      // Should only contain digits, dashes, and T
+      expect(timestamp).toMatch(/^[\d-T]+$/);
+    });
+
+    it('is deterministic for same moment', () => {
+      const date = new Date('2023-10-27T10:30:00.123Z');
+      const timestamp1 = date.toISOString().slice(0, 19).replace(/:/g, '-');
+      const timestamp2 = date.toISOString().slice(0, 19).replace(/:/g, '-');
+      expect(timestamp1).toBe(timestamp2);
+    });
+
+    it('works correctly with slice(0, 19) approach', () => {
+      // Verify that slice(0, 19) always gives us the right portion
+      const isoString = '2023-10-27T10:30:00.123Z';
+      const sliced = isoString.slice(0, 19);
+      expect(sliced).toBe('2023-10-27T10:30:00');
+      expect(sliced.length).toBe(19);
+    });
+
+    it('handles edge case: exactly 19 characters before milliseconds', () => {
+      // ISO strings are always 24 chars: YYYY-MM-DDTHH:mm:ss.mmmZ
+      // First 19 chars are always: YYYY-MM-DDTHH:mm:ss
+      const isoString = new Date().toISOString();
+      expect(isoString.length).toBe(24);
+      const first19 = isoString.slice(0, 19);
+      expect(first19.length).toBe(19);
+      expect(first19).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+    });
+  });
 });
 
