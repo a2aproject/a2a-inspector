@@ -4,7 +4,7 @@
 
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
 import {fireEvent} from '@testing-library/dom';
-import {generateFilenameTimestamp} from '../src/script';
+import {generateFilenameTimestamp, setupExportDropdown} from '../src/script';
 
 describe('Export Feature', () => {
   let exportChatBtn: HTMLButtonElement;
@@ -104,31 +104,13 @@ describe('Export Feature', () => {
       exportChatBtn.disabled = false;
       exportDropdownBtn.disabled = false;
 
-      // Set up dropdown toggle functionality
-      exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
-        e.stopPropagation();
-        exportDropdown.classList.toggle('hidden');
+      // Mock exportChatJSON function
+      const mockExportChatJSON = vi.fn(() => {
+        // Mock implementation - just a no-op for testing dropdown behavior
       });
 
-      // Set up click outside to close
-      document.addEventListener('click', (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        if (
-          !exportDropdown.contains(target) &&
-          target !== exportDropdownBtn &&
-          !exportDropdownBtn.contains(target) &&
-          target !== exportChatBtn &&
-          !exportChatBtn.contains(target)
-        ) {
-          exportDropdown.classList.add('hidden');
-        }
-      });
-
-      // Set up JSON button to close dropdown
-      exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
-        e.stopPropagation();
-        exportDropdown.classList.add('hidden');
-      });
+      // Set up dropdown using the actual implementation from script.ts
+      setupExportDropdown(exportDropdownBtn, exportDropdown, exportJsonBtn, mockExportChatJSON);
     });
 
     it('starts with dropdown hidden', () => {
@@ -326,19 +308,6 @@ describe('Export Feature', () => {
       expect(blob.size).toBeGreaterThan(0);
     });
 
-    it('generates timestamped filename for HTML export', () => {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      const filename = `a2a-chat-transcript-${timestamp}.html`;
-
-      expect(filename).toMatch(/^a2a-chat-transcript-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.html$/);
-    });
-
-    it('generates timestamped filename for JSON export', () => {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      const filename = `a2a-chat-export-${timestamp}.json`;
-
-      expect(filename).toMatch(/^a2a-chat-export-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.json$/);
-    });
   });
 
   describe('Export Button Integration', () => {

@@ -76,6 +76,44 @@ export function generateFilenameTimestamp(date?: Date): string {
   return dateToUse.toISOString().slice(0, 19).replace(/:/g, '-');
 }
 
+/**
+ * Sets up event listeners for the export dropdown menu.
+ * This function can be called from tests to initialize the dropdown behavior.
+ *
+ * @param exportDropdownBtn - The button that toggles the dropdown
+ * @param exportDropdown - The dropdown menu element
+ * @param exportJsonBtn - The button inside the dropdown for JSON export
+ * @param exportChatJSON - Function to call when JSON export is triggered
+ */
+export function setupExportDropdown(
+  exportDropdownBtn: HTMLButtonElement,
+  exportDropdown: HTMLElement,
+  exportJsonBtn: HTMLButtonElement,
+  exportChatJSON: () => void,
+): void {
+  // Dropdown button - toggles dropdown menu
+  exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
+    if (exportDropdownBtn.disabled) return;
+    e.stopPropagation();
+    exportDropdown.classList.toggle('hidden');
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e: MouseEvent) => {
+    const dropdownContainer = exportDropdown.closest('.dropdown-container');
+    if (dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
+      exportDropdown.classList.add('hidden');
+    }
+  });
+
+  // Export JSON
+  exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    exportChatJSON();
+    exportDropdown.classList.add('hidden');
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
@@ -697,27 +735,8 @@ document.addEventListener('DOMContentLoaded', () => {
     exportChatTranscript();
   });
 
-  // Dropdown button - toggles dropdown menu
-  exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
-    if (exportDropdownBtn.disabled) return;
-    e.stopPropagation();
-    exportDropdown.classList.toggle('hidden');
-  });
-
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e: MouseEvent) => {
-    const dropdownContainer = exportDropdown.closest('.dropdown-container');
-    if (dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
-      exportDropdown.classList.add('hidden');
-    }
-  });
-
-  // Export JSON
-  exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
-    e.stopPropagation();
-    exportChatJSON();
-    exportDropdown.classList.add('hidden');
-  });
+  // Set up dropdown menu event listeners
+  setupExportDropdown(exportDropdownBtn, exportDropdown, exportJsonBtn, exportChatJSON);
 
   modalCloseBtn.addEventListener('click', () =>
     jsonModal.classList.add('hidden'),
@@ -1608,11 +1627,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chatMessagesStore.push(chatMessage);
 
     // Enable export button if there are messages
-    if (exportChatBtn) {
-      exportChatBtn.disabled = false;
-    }
-    if (exportDropdownBtn) {
-      exportDropdownBtn.disabled = false;
-    }
+    updateSessionUI();
   }
 });
