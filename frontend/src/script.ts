@@ -1232,6 +1232,14 @@ document.addEventListener('DOMContentLoaded', () => {
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
+  /**
+   * Generate a clean timestamp string for filenames.
+   * Converts ISO string (e.g., "2023-10-27T10:30:00.123Z") to "2023-10-27T10-30-00"
+   */
+  function generateFilenameTimestamp(): string {
+    return new Date().toISOString().slice(0, -5).replace(/:/g, '-');
+  }
+
   function exportChatTranscript() {
     if (!chatMessagesStore || chatMessagesStore.length === 0) {
       alert('No messages to export.');
@@ -1251,7 +1259,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Create beautiful HTML chat transcript
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const timestamp = generateFilenameTimestamp();
     const exportDate = new Date().toLocaleString();
     const agentUrl = agentCardUrlInput.value.trim() || 'N/A';
 
@@ -1493,7 +1501,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Create JSON format
     const jsonContent = JSON.stringify(exportData, null, 2);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const timestamp = generateFilenameTimestamp();
     const jsonFilename = `a2a-chat-export-${timestamp}.json`;
 
     // Download JSON file
