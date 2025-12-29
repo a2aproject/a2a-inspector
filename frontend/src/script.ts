@@ -1,5 +1,5 @@
-import {io} from 'socket.io-client';
-import {marked} from 'marked';
+import { io } from 'socket.io-client';
+import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 // A2A File types (matching spec)
@@ -27,10 +27,10 @@ interface AgentResponseEvent {
   error?: string;
   status?: {
     state: string;
-    message?: {parts?: {text?: string}[]};
+    message?: { parts?: { text?: string }[] };
   };
   artifact?: {
-    parts?: ({file?: FileContent} | {text?: string} | {data?: object})[];
+    parts?: ({ file?: FileContent } | { text?: string } | { data?: object })[];
   };
   artifacts?: Array<{
     artifactId?: string;
@@ -38,12 +38,12 @@ interface AgentResponseEvent {
     description?: string;
     metadata?: object;
     parts?: (
-      | {kind?: string; file?: FileContent}
-      | {kind?: string; text?: string}
-      | {kind?: string; data?: object}
+      | { kind?: string; file?: FileContent }
+      | { kind?: string; text?: string }
+      | { kind?: string; data?: object }
     )[];
   }>;
-  parts?: {text?: string}[];
+  parts?: { text?: string }[];
   validation_errors: string[];
 }
 
@@ -174,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let isResizing = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rawLogStore: Record<string, Record<string, any>> = {};
-  const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
+  const messageJsonStore: { [key: string]: AgentResponseEvent } = {};
   const logIdQueue: string[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
@@ -504,8 +504,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function addKeyValueField(
     list: HTMLElement,
-    classes: {item: string; key: string; value: string; removeBtn: string},
-    placeholders: {key: string; value: string},
+    classes: { item: string; key: string; value: string; removeBtn: string },
+    placeholders: { key: string; value: string },
     removeLabel: string,
     key = '',
     value = '',
@@ -529,7 +529,7 @@ document.addEventListener('DOMContentLoaded', () => {
         value: 'header-value',
         removeBtn: 'remove-header-btn',
       },
-      {key: 'Header Name', value: 'Header Value'},
+      { key: 'Header Name', value: 'Header Value' },
       'Remove header',
       name,
       value,
@@ -545,19 +545,35 @@ document.addEventListener('DOMContentLoaded', () => {
         value: 'metadata-value',
         removeBtn: 'remove-metadata-btn',
       },
-      {key: 'Metadata Key', value: 'Metadata Value'},
+      { key: 'Metadata Key', value: 'Metadata Value' },
       'Remove metadata',
       key,
       value,
     );
   }
 
+  // Overload signatures
   function getKeyValuePairs(
     list: HTMLElement,
     itemSelector: string,
     keySelector: string,
     valueSelector: string,
-  ): Record<string, string> {
+    parseJson: true,
+  ): Record<string, any>;
+  function getKeyValuePairs(
+    list: HTMLElement,
+    itemSelector: string,
+    keySelector: string,
+    valueSelector: string,
+    parseJson?: false | undefined,
+  ): Record<string, string>;
+  function getKeyValuePairs(
+    list: HTMLElement,
+    itemSelector: string,
+    keySelector: string,
+    valueSelector: string,
+    parseJson: boolean = false,
+  ): Record<string, any> {
     const items = list.querySelectorAll(itemSelector);
     return Array.from(items).reduce(
       (acc, item) => {
@@ -568,11 +584,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const key = keyInput?.value.trim();
         const value = valueInput?.value.trim();
         if (key && value) {
-          acc[key] = value;
+          if (parseJson) {
+            try {
+              acc[key] = JSON.parse(value);
+            } catch {
+              // If not valid JSON, keep as string
+              acc[key] = value;
+            }
+          } else {
+            acc[key] = value;
+          }
         }
         return acc;
       },
-      {} as Record<string, string>,
+      {} as Record<string, any>,
     );
   }
 
@@ -631,12 +656,13 @@ document.addEventListener('DOMContentLoaded', () => {
     return headers;
   }
 
-  function getMessageMetadata(): Record<string, string> {
+  function getMessageMetadata(): Record<string, any> {
     return getKeyValuePairs(
       metadataList,
       '.metadata-item',
       '.metadata-key',
       '.metadata-value',
+      true, // enable json parsing of metadata
     );
   }
 
@@ -717,7 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, sid: socket.id}),
+        body: JSON.stringify({ url: agentCardUrl, sid: socket.id }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -983,7 +1009,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (p.text) {
       return DOMPurify.sanitize(marked.parse(p.text) as string);
     } else if (p.file) {
-      const {uri, bytes, mimeType} = p.file;
+      const { uri, bytes, mimeType } = p.file;
       if (bytes && mimeType) {
         return renderBase64Data(bytes, mimeType);
       } else if (uri && mimeType) {
