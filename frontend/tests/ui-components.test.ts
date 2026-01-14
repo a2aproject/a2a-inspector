@@ -43,7 +43,6 @@ describe('Collapsible Sections', () => {
     fireEvent.click(toggleElement); // Collapse
     expect(contentElement.classList.contains('expanded')).toBe(false);
   });
-
 });
 
 describe('User Input', () => {
@@ -68,7 +67,6 @@ describe('User Input', () => {
 
     expect(input.value).toBe('Hello, agent!');
   });
-
 });
 
 describe('Message Rendering', () => {
@@ -160,10 +158,7 @@ describe('Message Rendering', () => {
 });
 
 // Helper function to set up collapsible toggle
-function setupToggle(
-  toggleElement: HTMLElement,
-  contentElement: HTMLElement,
-) {
+function setupToggle(toggleElement: HTMLElement, contentElement: HTMLElement) {
   const icon = toggleElement.querySelector('.toggle-icon') as HTMLElement;
 
   toggleElement.addEventListener('click', () => {

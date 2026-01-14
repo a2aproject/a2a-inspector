@@ -26,9 +26,15 @@ describe('Dark Mode Toggle', () => {
       </div>
     `;
 
-    themeCheckbox = document.getElementById('theme-checkbox') as HTMLInputElement;
-    highlightLight = document.getElementById('highlight-light') as HTMLLinkElement;
-    highlightDark = document.getElementById('highlight-dark') as HTMLLinkElement;
+    themeCheckbox = document.getElementById(
+      'theme-checkbox',
+    ) as HTMLInputElement;
+    highlightLight = document.getElementById(
+      'highlight-light',
+    ) as HTMLLinkElement;
+    highlightDark = document.getElementById(
+      'highlight-dark',
+    ) as HTMLLinkElement;
 
     // Initialize the dark mode handler
     initializeDarkMode();
@@ -89,9 +95,15 @@ describe('Dark Mode Toggle', () => {
 
 // Helper function that mirrors the actual implementation
 function initializeDarkMode() {
-  const themeCheckbox = document.getElementById('theme-checkbox') as HTMLInputElement;
-  const highlightLight = document.getElementById('highlight-light') as HTMLLinkElement;
-  const highlightDark = document.getElementById('highlight-dark') as HTMLLinkElement;
+  const themeCheckbox = document.getElementById(
+    'theme-checkbox',
+  ) as HTMLInputElement;
+  const highlightLight = document.getElementById(
+    'highlight-light',
+  ) as HTMLLinkElement;
+  const highlightDark = document.getElementById(
+    'highlight-dark',
+  ) as HTMLLinkElement;
 
   const updateSyntaxHighlighting = (isDark: boolean) => {
     if (isDark) {
