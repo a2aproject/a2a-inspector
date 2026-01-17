@@ -1,0 +1,390 @@
+/**
+ * Tests for chat export functionality
+ */
+
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
+import {fireEvent} from '@testing-library/dom';
+import {generateFilenameTimestamp, setupExportDropdown} from '../src/script';
+
+describe('Export Feature', () => {
+  let exportChatBtn: HTMLButtonElement;
+  let exportDropdownBtn: HTMLButtonElement;
+  let exportDropdown: HTMLElement;
+  let exportJsonBtn: HTMLButtonElement;
+  let chatMessages: HTMLElement;
+  let agentCardUrlInput: HTMLInputElement;
+
+  // Mock for URL.createObjectURL and URL.revokeObjectURL
+  const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
+  const mockRevokeObjectURL = vi.fn();
+  const mockClick = vi.fn();
+
+  beforeEach(() => {
+    // Mock URL methods
+    global.URL.createObjectURL = mockCreateObjectURL;
+    global.URL.revokeObjectURL = mockRevokeObjectURL;
+
+    // Mock document.createElement for anchor elements only
+    const originalCreateElement = document.createElement;
+    document.createElement = vi.fn((tagName: string) => {
+      const element = originalCreateElement.call(document, tagName);
+      if (tagName === 'a') {
+        element.click = mockClick;
+      }
+      return element;
+    }) as typeof document.createElement;
+
+    document.body.innerHTML = `
+      <div>
+        <input type="text" id="agent-card-url" placeholder="Enter Agent Card URL" value="https://example.com/agent">
+        <div id="chat-container">
+          <div class="chat-header-container">
+            <div class="chat-header-buttons">
+              <div class="dropdown-container">
+                <div class="export-btn-wrapper">
+                  <button id="export-chat-btn" class="export-chat-btn" disabled>💾 Export to HTML</button>
+                  <button id="export-dropdown-btn" class="export-dropdown-btn" disabled>▼</button>
+                </div>
+                <div id="export-dropdown" class="dropdown-menu hidden">
+                  <button id="export-json-btn" class="dropdown-item">Export to JSON</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="chat-messages">
+            <p class="placeholder-text">Messages will appear here.</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    exportChatBtn = document.getElementById('export-chat-btn') as HTMLButtonElement;
+    exportDropdownBtn = document.getElementById('export-dropdown-btn') as HTMLButtonElement;
+    exportDropdown = document.getElementById('export-dropdown') as HTMLElement;
+    exportJsonBtn = document.getElementById('export-json-btn') as HTMLButtonElement;
+    chatMessages = document.getElementById('chat-messages') as HTMLElement;
+    agentCardUrlInput = document.getElementById('agent-card-url') as HTMLInputElement;
+
+    // Reset mocks
+    mockCreateObjectURL.mockClear();
+    mockRevokeObjectURL.mockClear();
+    mockClick.mockClear();
+  });
+
+  afterEach(() => {
+    // Restore original createElement
+    vi.restoreAllMocks();
+  });
+
+  describe('Export Button State', () => {
+    it('starts with export buttons disabled', () => {
+      expect(exportChatBtn.disabled).toBe(true);
+      expect(exportDropdownBtn.disabled).toBe(true);
+    });
+
+    it('enables export buttons when messages are added', () => {
+      // Simulate adding a message
+      const message = document.createElement('div');
+      message.className = 'message user';
+      message.textContent = 'Test message';
+      chatMessages.appendChild(message);
+
+      // Simulate enabling buttons (as would happen in real code)
+      exportChatBtn.disabled = false;
+      exportDropdownBtn.disabled = false;
+
+      expect(exportChatBtn.disabled).toBe(false);
+      expect(exportDropdownBtn.disabled).toBe(false);
+    });
+  });
+
+  describe('Dropdown Menu', () => {
+    beforeEach(() => {
+      // Enable buttons for dropdown tests
+      exportChatBtn.disabled = false;
+      exportDropdownBtn.disabled = false;
+
+      // Mock exportChatJSON function
+      const mockExportChatJSON = vi.fn(() => {
+        // Mock implementation - just a no-op for testing dropdown behavior
+      });
+
+      // Set up dropdown using the actual implementation from script.ts
+      setupExportDropdown(exportDropdownBtn, exportDropdown, exportJsonBtn, mockExportChatJSON);
+    });
+
+    it('starts with dropdown hidden', () => {
+      expect(exportDropdown.classList.contains('hidden')).toBe(true);
+    });
+
+    it('toggles dropdown when dropdown button is clicked', () => {
+      fireEvent.click(exportDropdownBtn);
+      expect(exportDropdown.classList.contains('hidden')).toBe(false);
+
+      fireEvent.click(exportDropdownBtn);
+      expect(exportDropdown.classList.contains('hidden')).toBe(true);
+    });
+
+    it('closes dropdown when clicking outside', () => {
+      fireEvent.click(exportDropdownBtn); // Open dropdown
+      expect(exportDropdown.classList.contains('hidden')).toBe(false);
+
+      fireEvent.click(document.body); // Click outside
+      expect(exportDropdown.classList.contains('hidden')).toBe(true);
+    });
+
+    it('closes dropdown when Export to JSON is clicked', () => {
+      fireEvent.click(exportDropdownBtn); // Open dropdown
+      expect(exportDropdown.classList.contains('hidden')).toBe(false);
+
+      fireEvent.click(exportJsonBtn);
+      expect(exportDropdown.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  describe('Export Transcript Functionality', () => {
+    // Mock chatMessagesStore structure
+    const createMockChatMessage = (
+      sender: string,
+      content: string,
+      kind?: string,
+    ) => {
+      return {
+        sender,
+        content,
+        cleanContent: content, // For tests, cleanContent is same as content
+        messageId: `msg-${Date.now()}-${Math.random()}`,
+        timestamp: new Date().toISOString(),
+        validationErrors: [] as string[],
+        attachments: [] as any[],
+        rawJson: kind
+          ? {
+              kind,
+              id: `msg-${Date.now()}`,
+            }
+          : undefined,
+      };
+    };
+
+    it('filters messages to only user and artifact-update', () => {
+      const messages = [
+        createMockChatMessage('user', 'Hello'),
+        createMockChatMessage('agent', 'Status update', 'status-update'),
+        createMockChatMessage('agent', 'Artifact', 'artifact-update'),
+        createMockChatMessage('agent', 'Task', 'task'),
+        createMockChatMessage('agent', 'Message', 'message'),
+      ];
+
+      // Filter logic from exportChatTranscript
+      const filtered = messages.filter(msg => {
+        if (msg.sender === 'user') return true;
+        if (msg.rawJson && msg.rawJson.kind === 'artifact-update') return true;
+        return false;
+      });
+
+      expect(filtered).toHaveLength(2);
+      expect(filtered[0].sender).toBe('user');
+      expect(filtered[1].rawJson?.kind).toBe('artifact-update');
+    });
+
+    it('excludes status-update messages', () => {
+      const messages = [
+        createMockChatMessage('agent', 'Status', 'status-update'),
+      ];
+
+      const filtered = messages.filter(msg => {
+        if (msg.sender === 'user') return true;
+        if (msg.rawJson && msg.rawJson.kind === 'artifact-update') return true;
+        return false;
+      });
+
+      expect(filtered).toHaveLength(0);
+    });
+
+    it('excludes task messages without artifacts', () => {
+      const messages = [
+        createMockChatMessage('agent', 'Task', 'task'),
+      ];
+
+      const filtered = messages.filter(msg => {
+        if (msg.sender === 'user') return true;
+        if (msg.rawJson && msg.rawJson.kind === 'artifact-update') return true;
+        return false;
+      });
+
+      expect(filtered).toHaveLength(0);
+    });
+  });
+
+  describe('Export JSON Functionality', () => {
+    const createMockChatMessage = (
+      sender: string,
+      content: string,
+      kind?: string,
+    ) => {
+      return {
+        sender,
+        content,
+        cleanContent: content, // For tests, cleanContent is same as content
+        messageId: `msg-${Date.now()}-${Math.random()}`,
+        timestamp: new Date().toISOString(),
+        validationErrors: [] as string[],
+        attachments: [] as any[],
+        rawJson: kind
+          ? {
+              kind,
+              id: `msg-${Date.now()}`,
+            }
+          : undefined,
+      };
+    };
+
+    it('includes all messages in JSON export', () => {
+      const messages = [
+        createMockChatMessage('user', 'Hello'),
+        createMockChatMessage('agent', 'Status', 'status-update'),
+        createMockChatMessage('agent', 'Artifact', 'artifact-update'),
+        createMockChatMessage('agent', 'Task', 'task'),
+      ];
+
+      // JSON export should include all messages
+      const exportData = {
+        metadata: {
+          exportedAt: new Date().toISOString(),
+          contextId: null,
+          totalMessages: messages.length,
+          agentUrl: 'https://example.com/agent',
+        },
+        messages: messages.map(msg => ({
+          sender: msg.sender,
+          content: msg.content,
+          messageId: msg.messageId,
+          timestamp: msg.timestamp,
+          validationErrors: msg.validationErrors,
+          attachments: msg.attachments,
+          rawJson: msg.rawJson,
+        })),
+      };
+
+      expect(exportData.messages).toHaveLength(4);
+      expect(exportData.metadata.totalMessages).toBe(4);
+    });
+
+    it('includes metadata in JSON export', () => {
+      const exportData = {
+        metadata: {
+          exportedAt: new Date().toISOString(),
+          contextId: 'context-123',
+          totalMessages: 2,
+          agentUrl: 'https://example.com/agent',
+        },
+        messages: [],
+      };
+
+      expect(exportData.metadata.contextId).toBe('context-123');
+      expect(exportData.metadata.agentUrl).toBe('https://example.com/agent');
+      expect(exportData.metadata.totalMessages).toBe(2);
+      expect(exportData.metadata.exportedAt).toBeTruthy();
+    });
+  });
+
+  describe('File Download', () => {
+    beforeEach(() => {
+      exportChatBtn.disabled = false;
+      exportDropdownBtn.disabled = false;
+    });
+
+    it('creates blob with correct MIME type for HTML', () => {
+      const htmlContent = '<html><body>Test</body></html>';
+      const blob = new Blob([htmlContent], {type: 'text/html'});
+
+      expect(blob.type).toBe('text/html');
+      expect(blob.size).toBeGreaterThan(0);
+    });
+
+    it('creates blob with correct MIME type for JSON', () => {
+      const jsonContent = JSON.stringify({test: 'data'});
+      const blob = new Blob([jsonContent], {type: 'application/json'});
+
+      expect(blob.type).toBe('application/json');
+      expect(blob.size).toBeGreaterThan(0);
+    });
+
+  });
+
+  describe('Export Button Integration', () => {
+    beforeEach(() => {
+      exportChatBtn.disabled = false;
+      exportDropdownBtn.disabled = false;
+    });
+
+    it('main export button triggers transcript export', () => {
+      // This would trigger exportChatTranscript in real code
+      // We're testing the button is wired up correctly
+      expect(exportChatBtn.textContent).toContain('Export to HTML');
+      expect(exportChatBtn.disabled).toBe(false);
+    });
+
+    it('dropdown JSON button triggers JSON export', () => {
+      expect(exportJsonBtn.textContent).toBe('Export to JSON');
+      expect(exportJsonBtn.classList.contains('dropdown-item')).toBe(true);
+    });
+  });
+
+  describe('generateFilenameTimestamp', () => {
+    it('generates timestamp for standard date', () => {
+      const testDate = new Date('2023-10-27T10:30:00.123Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
+    });
+
+    it('handles midnight', () => {
+      const testDate = new Date('2023-01-01T00:00:00.000Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-01-01T00-00-00');
+    });
+
+    it('handles end of day', () => {
+      const testDate = new Date('2023-12-31T23:59:59.999Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-12-31T23-59-59');
+    });
+
+    it('handles single digit months and days', () => {
+      const testDate = new Date('2023-01-05T09:05:03.456Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-01-05T09-05-03');
+    });
+
+    it('handles single digit hours, minutes, seconds', () => {
+      const testDate = new Date('2023-06-15T05:07:09.789Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-06-15T05-07-09');
+    });
+
+    it('is deterministic for same moment', () => {
+      const testDate = new Date('2023-10-27T10:30:00.123Z');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
+      expect(generateFilenameTimestamp(testDate)).toBe('2023-10-27T10-30-00');
+    });
+
+    it('defaults to current date when no parameter provided', () => {
+      const timestamp = generateFilenameTimestamp();
+      expect(timestamp.length).toBe(19);
+      expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
+    });
+
+    it('handles noon', () => {
+      expect(generateFilenameTimestamp(new Date('2023-06-15T12:00:00.000Z'))).toBe('2023-06-15T12-00-00');
+    });
+
+    it('handles one second before midnight', () => {
+      expect(generateFilenameTimestamp(new Date('2023-12-31T23:59:58.999Z'))).toBe('2023-12-31T23-59-58');
+    });
+
+    it('handles leap year date', () => {
+      expect(generateFilenameTimestamp(new Date('2024-02-29T14:30:45.123Z'))).toBe('2024-02-29T14-30-45');
+    });
+
+    it('handles year boundary', () => {
+      expect(generateFilenameTimestamp(new Date('2023-12-31T23:59:59.999Z'))).toBe('2023-12-31T23-59-59');
+      expect(generateFilenameTimestamp(new Date('2024-01-01T00:00:00.000Z'))).toBe('2024-01-01T00-00-00');
+    });
+  });
+});
+

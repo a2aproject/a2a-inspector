@@ -63,6 +63,85 @@ declare global {
   }
 }
 
+/**
+ * Generate a clean timestamp string for filenames.
+ * Converts ISO string (e.g., "2023-10-27T10:30:00.123Z") to "2023-10-27T10-30-00"
+ * Uses slice(0, 19) to safely extract the date-time portion before milliseconds.
+ *
+ * @param date - Optional Date object. Defaults to current date/time if not provided.
+ * @returns Timestamp string in format YYYY-MM-DDTHH-MM-SS
+ */
+export function generateFilenameTimestamp(date?: Date): string {
+  const dateToUse = date ?? new Date();
+  return dateToUse.toISOString().slice(0, 19).replace(/:/g, '-');
+}
+
+/**
+ * Sets up event listeners for the export dropdown menu.
+ * This function can be called from tests to initialize the dropdown behavior.
+ *
+ * @param exportDropdownBtn - The button that toggles the dropdown
+ * @param exportDropdown - The dropdown menu element
+ * @param exportJsonBtn - The button inside the dropdown for JSON export
+ * @param exportChatJSON - Function to call when JSON export is triggered
+ */
+export function setupExportDropdown(
+  exportDropdownBtn: HTMLButtonElement,
+  exportDropdown: HTMLElement,
+  exportJsonBtn: HTMLButtonElement,
+  exportChatJSON: () => void,
+): void {
+  // Handler for clicking outside the dropdown to close it
+  const handleClickOutside = (e: MouseEvent) => {
+    const target = e.target as Node;
+    const dropdownContainer = exportDropdown.closest('.dropdown-container');
+    
+    // Don't close if clicking on the button or within the dropdown container
+    if (
+      dropdownContainer &&
+      (target === exportDropdownBtn ||
+        exportDropdownBtn.contains(target) ||
+        dropdownContainer.contains(target))
+    ) {
+      return;
+    }
+    
+    closeDropdown();
+  };
+
+  // Function to close dropdown and remove the document click listener
+  const closeDropdown = () => {
+    exportDropdown.classList.add('hidden');
+    document.removeEventListener('click', handleClickOutside);
+  };
+
+  // Function to open dropdown and add the document click listener
+  const openDropdown = () => {
+    exportDropdown.classList.remove('hidden');
+    // Add listener immediately - stopPropagation on button click prevents immediate close
+    document.addEventListener('click', handleClickOutside);
+  };
+
+  // Dropdown button - toggles dropdown menu
+  exportDropdownBtn.addEventListener('click', (e: MouseEvent) => {
+    if (exportDropdownBtn.disabled) return;
+    e.stopPropagation();
+    const isHidden = exportDropdown.classList.contains('hidden');
+    if (isHidden) {
+      openDropdown();
+    } else {
+      closeDropdown();
+    }
+  });
+
+  // Export JSON - closes dropdown after export
+  exportJsonBtn.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    exportChatJSON();
+    closeDropdown();
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
@@ -161,6 +240,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const newSessionBtn = document.getElementById(
     'new-session-btn',
   ) as HTMLButtonElement;
+  const exportChatBtn = document.getElementById(
+    'export-chat-btn',
+  ) as HTMLButtonElement;
+  const exportDropdownBtn = document.getElementById(
+    'export-dropdown-btn',
+  ) as HTMLButtonElement;
+  const exportDropdown = document.getElementById(
+    'export-dropdown',
+  ) as HTMLElement;
+  const exportJsonBtn = document.getElementById(
+    'export-json-btn',
+  ) as HTMLButtonElement;
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
   const attachBtn = document.getElementById('attach-btn') as HTMLButtonElement;
   const attachmentsPreview = document.getElementById(
@@ -176,6 +267,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const rawLogStore: Record<string, Record<string, any>> = {};
   const messageJsonStore: {[key: string]: AgentResponseEvent} = {};
   const logIdQueue: string[] = [];
+  // Store chat messages for export
+  interface ChatMessage {
+    sender: string;
+    content: string; // Content with UI elements (kind chips, etc.)
+    cleanContent: string; // Content without UI elements, suitable for export
+    messageId: string;
+    timestamp: string;
+    validationErrors: string[];
+    attachments: Attachment[];
+    rawJson?: any;
+  }
+  const chatMessagesStore: ChatMessage[] = [];
   let initializationTimeout: ReturnType<typeof setTimeout>;
   let isProcessingLogQueue = false;
 
@@ -655,6 +758,15 @@ document.addEventListener('DOMContentLoaded', () => {
     resetSession();
   });
 
+  // Main Export to HTML button - exports transcript directly
+  exportChatBtn.addEventListener('click', () => {
+    if (exportChatBtn.disabled) return;
+    exportChatTranscript();
+  });
+
+  // Set up dropdown menu event listeners
+  setupExportDropdown(exportDropdownBtn, exportDropdown, exportJsonBtn, exportChatJSON);
+
   modalCloseBtn.addEventListener('click', () =>
     jsonModal.classList.add('hidden'),
   );
@@ -884,12 +996,21 @@ document.addEventListener('DOMContentLoaded', () => {
         placeholder.textContent = 'Send a message to start a new session.';
       }
     }
+
+    // Update export buttons based on message availability (independent of session state)
+    if (exportChatBtn) {
+      exportChatBtn.disabled = chatMessagesStore.length === 0;
+    }
+    if (exportDropdownBtn) {
+      exportDropdownBtn.disabled = chatMessagesStore.length === 0;
+    }
   };
 
   const resetSession = () => {
     contextId = null;
     chatMessages.innerHTML =
       '<p class="placeholder-text">Send a message to start a new session.</p>';
+    chatMessagesStore.length = 0; // Clear stored messages
     updateSessionUI();
   };
 
@@ -1010,13 +1131,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const validationErrors = event.validation_errors || [];
 
     if (event.error) {
-      const messageHtml = `<span class="kind-chip kind-chip-error">error</span> Error: ${DOMPurify.sanitize(event.error)}`;
+      const errorText = `Error: ${DOMPurify.sanitize(event.error)}`;
+      const messageHtml = `<span class="kind-chip kind-chip-error">error</span> ${errorText}`;
       appendMessage(
         'agent error',
         messageHtml,
         displayMessageId,
         true,
         validationErrors,
+        [],
+        errorText,
       );
       return;
     }
@@ -1053,17 +1177,22 @@ document.addEventListener('DOMContentLoaded', () => {
               displayMessageId,
               true,
               validationErrors,
+              [],
+              combinedContent,
             );
           }
         } else if (event.status) {
           // Only show task status if there are no artifacts
-          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+          const statusText = `Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> ${statusText}`;
           appendMessage(
             'agent progress',
             statusHtml,
             displayMessageId,
             true,
             validationErrors,
+            [],
+            statusText,
           );
         }
         break;
@@ -1074,13 +1203,16 @@ document.addEventListener('DOMContentLoaded', () => {
           const renderedContent = DOMPurify.sanitize(
             marked.parse(statusText) as string,
           );
-          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> Server responded with: ${renderedContent}`;
+          const cleanContent = `Server responded with: ${renderedContent}`;
+          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> ${cleanContent}`;
           appendMessage(
             'agent progress',
             messageHtml,
             displayMessageId,
             true,
             validationErrors,
+            [],
+            cleanContent,
           );
         }
         break;
@@ -1097,6 +1229,8 @@ document.addEventListener('DOMContentLoaded', () => {
               displayMessageId,
               true,
               validationErrors,
+              [],
+              content,
             );
           }
         });
@@ -1114,6 +1248,8 @@ document.addEventListener('DOMContentLoaded', () => {
             displayMessageId,
             true,
             validationErrors,
+            [],
+            renderedContent,
           );
         }
         break;
@@ -1166,6 +1302,327 @@ document.addEventListener('DOMContentLoaded', () => {
     debugContent.scrollTop = debugContent.scrollHeight;
   });
 
+  // Helper function to validate messages before export
+  function validateMessagesForExport(): boolean {
+    if (!chatMessagesStore || chatMessagesStore.length === 0) {
+      alert('No messages to export.');
+      return false;
+    }
+    return true;
+  }
+
+  // Helper function to download a file
+  function downloadFile(content: string, filename: string, mimeType: string): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportChatTranscript() {
+    if (!validateMessagesForExport()) {
+      return;
+    }
+
+    // Filter: only user messages and artifact-update responses
+    const filteredMessages = chatMessagesStore.filter(msg => {
+      if (msg.sender === 'user') return true;
+      if (msg.rawJson && msg.rawJson.kind === 'artifact-update') return true;
+      return false;
+    });
+
+    if (filteredMessages.length === 0) {
+      alert('No chat transcript to export (no user messages or artifact updates found).');
+      return;
+    }
+
+    // Create beautiful HTML chat transcript
+    const timestamp = generateFilenameTimestamp();
+    const exportDate = new Date().toLocaleString();
+    const agentUrl = agentCardUrlInput.value.trim() || 'N/A';
+
+    // CSS constants for transcript styling
+    const CSS_COLORS = {
+      primary: '#667eea',
+      primaryDark: '#764ba2',
+      background: '#f5f5f5',
+      white: 'white',
+      lightGray: '#e0e0e0',
+      gray: '#666',
+      lightBg: '#f0f0f0',
+      darkText: '#333',
+      lightText: '#999',
+    };
+
+    const CSS_SIZES = {
+      containerMaxWidth: '800px',
+      containerPadding: '20px',
+      containerBorderRadius: '12px',
+      headerPadding: '24px',
+      headerTitleSize: '24px',
+      headerMetaSize: '14px',
+      chatContainerPadding: '24px',
+      messageGap: '12px',
+      messageMarginBottom: '24px',
+      avatarSize: '40px',
+      avatarFontSize: '20px',
+      bubblePadding: '12px 16px',
+      bubbleBorderRadius: '18px',
+      bubbleCornerRadius: '4px',
+      paragraphMargin: '8px',
+      imageBorderRadius: '8px',
+      codePadding: '8px',
+      codeBorderRadius: '4px',
+      codeFontSize: '12px',
+      timeFontSize: '11px',
+      timeMargin: '4px',
+      badgePadding: '4px 8px',
+      badgeBorderRadius: '12px',
+      badgeFontSize: '12px',
+    };
+
+    const CSS_GRADIENTS = {
+      header: `linear-gradient(135deg, ${CSS_COLORS.primary} 0%, ${CSS_COLORS.primaryDark} 100%)`,
+    };
+
+    let htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A2A Chat Transcript</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: ${CSS_COLORS.background};
+            padding: ${CSS_SIZES.containerPadding};
+            line-height: 1.6;
+        }
+        .container {
+            max-width: ${CSS_SIZES.containerMaxWidth};
+            margin: 0 auto;
+            background: ${CSS_COLORS.white};
+            border-radius: ${CSS_SIZES.containerBorderRadius};
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: ${CSS_GRADIENTS.header};
+            color: ${CSS_COLORS.white};
+            padding: ${CSS_SIZES.headerPadding};
+            text-align: center;
+        }
+        .header h1 {
+            font-size: ${CSS_SIZES.headerTitleSize};
+            margin-bottom: ${CSS_SIZES.paragraphMargin};
+        }
+        .header .meta {
+            font-size: ${CSS_SIZES.headerMetaSize};
+            opacity: 0.9;
+        }
+        .chat-container {
+            padding: ${CSS_SIZES.chatContainerPadding};
+        }
+        .message {
+            margin-bottom: ${CSS_SIZES.messageMarginBottom};
+            display: flex;
+            gap: ${CSS_SIZES.messageGap};
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        .message-avatar {
+            width: ${CSS_SIZES.avatarSize};
+            height: ${CSS_SIZES.avatarSize};
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: ${CSS_SIZES.avatarFontSize};
+            flex-shrink: 0;
+        }
+        .message.user .message-avatar {
+            background: ${CSS_COLORS.primary};
+            color: ${CSS_COLORS.white};
+        }
+        .message.agent .message-avatar {
+            background: ${CSS_COLORS.lightGray};
+            color: ${CSS_COLORS.gray};
+        }
+        .message-content {
+            flex: 1;
+            max-width: 70%;
+        }
+        .message.user .message-content {
+            text-align: right;
+        }
+        .message-bubble {
+            padding: ${CSS_SIZES.bubblePadding};
+            border-radius: ${CSS_SIZES.bubbleBorderRadius};
+            display: inline-block;
+            word-wrap: break-word;
+        }
+        .message.user .message-bubble {
+            background: ${CSS_COLORS.primary};
+            color: ${CSS_COLORS.white};
+            border-bottom-right-radius: ${CSS_SIZES.bubbleCornerRadius};
+        }
+        .message.agent .message-bubble {
+            background: ${CSS_COLORS.lightBg};
+            color: ${CSS_COLORS.darkText};
+            border-bottom-left-radius: ${CSS_SIZES.bubbleCornerRadius};
+        }
+        .message-bubble p {
+            margin: 0 0 ${CSS_SIZES.paragraphMargin} 0;
+        }
+        .message-bubble p:last-child {
+            margin-bottom: 0;
+        }
+        .message-bubble img {
+            max-width: 100%;
+            border-radius: ${CSS_SIZES.imageBorderRadius};
+            margin-top: ${CSS_SIZES.paragraphMargin};
+        }
+        .message-bubble pre {
+            background: rgba(0,0,0,0.05);
+            padding: ${CSS_SIZES.codePadding};
+            border-radius: ${CSS_SIZES.codeBorderRadius};
+            overflow-x: auto;
+            font-size: ${CSS_SIZES.codeFontSize};
+        }
+        .message-time {
+            font-size: ${CSS_SIZES.timeFontSize};
+            color: ${CSS_COLORS.lightText};
+            margin-top: ${CSS_SIZES.timeMargin};
+            padding: 0 ${CSS_SIZES.timeMargin};
+        }
+        .message.user .message-time {
+            text-align: right;
+        }
+        .attachments {
+            margin-top: ${CSS_SIZES.paragraphMargin};
+            display: flex;
+            flex-wrap: wrap;
+            gap: ${CSS_SIZES.timeMargin};
+        }
+        .attachment-badge {
+            background: rgba(255,255,255,0.2);
+            padding: ${CSS_SIZES.badgePadding};
+            border-radius: ${CSS_SIZES.badgeBorderRadius};
+            font-size: ${CSS_SIZES.badgeFontSize};
+        }
+        .message.agent .attachment-badge {
+            background: rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💬 A2A Chat Transcript</h1>
+            <div class="meta">
+                <div>Exported: ${exportDate}</div>
+                <div>Agent: ${agentUrl}</div>
+            </div>
+        </div>
+        <div class="chat-container">
+`;
+
+    // Generate HTML for each message using map() for better performance
+    const messageHtmls = filteredMessages.map(msg => {
+      const isUser = msg.sender === 'user';
+      const timestamp = new Date(msg.timestamp).toLocaleTimeString();
+      const avatar = isUser ? '👤' : '🤖';
+      
+      // Use cleanContent (content without UI elements like kind chips)
+      // Sanitize content for HTML export (already contains HTML from marked)
+      const sanitizedContent = DOMPurify.sanitize(msg.cleanContent, {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'img', 'a', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        ALLOWED_ATTR: ['src', 'alt', 'href', 'target', 'rel', 'class'],
+      });
+      
+      const attachmentsHtml = msg.attachments.length > 0
+        ? `<div class="attachments">
+            ${msg.attachments.map(att => 
+              `<span class="attachment-badge">📎 ${DOMPurify.sanitize(att.name)}</span>`
+            ).join('')}
+        </div>`
+        : '';
+      
+      return `
+            <div class="message ${isUser ? 'user' : 'agent'}">
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-content">
+                    <div class="message-bubble">
+                        ${sanitizedContent}
+                        ${attachmentsHtml}
+                    </div>
+                    <div class="message-time">${timestamp}</div>
+                </div>
+            </div>`;
+    });
+
+    htmlContent += messageHtmls.join('') + `
+        </div>
+    </div>
+</body>
+</html>`;
+
+    // Download HTML file
+    downloadFile(htmlContent, `a2a-chat-transcript-${timestamp}.html`, 'text/html');
+  }
+
+  function exportChatJSON() {
+    if (!validateMessagesForExport()) {
+      return;
+    }
+
+    // Create export data
+    const exportData = {
+      metadata: {
+        exportedAt: new Date().toISOString(),
+        contextId: contextId || null,
+        totalMessages: chatMessagesStore.length,
+        agentUrl: agentCardUrlInput.value.trim() || null,
+      },
+      messages: chatMessagesStore.map(msg => ({
+        sender: msg.sender,
+        content: msg.content,
+        messageId: msg.messageId,
+        timestamp: msg.timestamp,
+        validationErrors: msg.validationErrors,
+        attachments: msg.attachments.map(att => ({
+          name: att.name,
+          size: att.size,
+          mimeType: att.mimeType,
+        })),
+        rawJson: msg.rawJson,
+      })),
+    };
+
+    // Create JSON format
+    const jsonContent = JSON.stringify(exportData, null, 2);
+    const timestamp = generateFilenameTimestamp();
+
+    // Download JSON file
+    downloadFile(jsonContent, `a2a-chat-export-${timestamp}.json`, 'application/json');
+  }
+
   function appendMessage(
     sender: string,
     content: string,
@@ -1173,6 +1630,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isHtml = false,
     validationErrors: string[] = [],
     attachmentsToShow: Attachment[] = [],
+    cleanContent?: string, // Content without UI elements (kind chips, etc.)
   ) {
     const placeholder = chatMessages.querySelector('.placeholder-text');
     if (placeholder) placeholder.remove();
@@ -1239,5 +1697,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chatMessages.appendChild(messageElement);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Store message for export
+    // Use provided cleanContent or fall back to content (for backward compatibility)
+    const chatMessage: ChatMessage = {
+      sender,
+      content,
+      cleanContent: cleanContent ?? content,
+      messageId,
+      timestamp: new Date().toISOString(),
+      validationErrors,
+      attachments: attachmentsToShow,
+      rawJson:
+        sender === 'user'
+          ? rawLogStore[messageId]?.request
+          : messageJsonStore[messageId],
+    };
+    chatMessagesStore.push(chatMessage);
+
+    // Enable export button if there are messages
+    updateSessionUI();
   }
 });
