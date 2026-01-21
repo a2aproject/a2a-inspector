@@ -4,10 +4,10 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
+import agent_validators
 import bleach
 import httpx
 import socketio
-import validators
 
 from a2a.client import A2ACardResolver
 from a2a.client.client import Client, ClientConfig, ClientEvent
@@ -114,7 +114,7 @@ async def _process_a2a_response(
     response_data = event.model_dump(exclude_none=True)
     response_data['id'] = response_id
 
-    validation_errors = validators.validate_message(response_data)
+    validation_errors = agent_validators.validate_message(response_data)
     response_data['validation_errors'] = validation_errors
 
     await _emit_debug_log(sid, response_id, 'response', response_data)
@@ -200,7 +200,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
             card = await card_resolver.get_agent_card()
 
         card_data = card.model_dump(exclude_none=True)
-        validation_errors = validators.validate_agent_card(card_data)
+        validation_errors = agent_validators.validate_agent_card(card_data)
         response_data = {
             'card': card_data,
             'validation_errors': validation_errors,

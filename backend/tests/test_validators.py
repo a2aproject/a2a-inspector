@@ -1,6 +1,6 @@
 import pytest
 
-from backend import validators
+from backend import agent_validators
 
 
 # ==============================================================================
@@ -31,7 +31,7 @@ def valid_card_data():
 class TestValidateAgentCard:
     def test_valid_card(self, valid_card_data):
         """A valid agent card should produce no validation errors."""
-        errors = validators.validate_agent_card(valid_card_data)
+        errors = agent_validators.validate_agent_card(valid_card_data)
         assert not errors
 
     @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ class TestValidateAgentCard:
         """A missing required field should be detected."""
         card_data = valid_card_data.copy()
         del card_data[missing_field]
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert f"Required field is missing: '{missing_field}'." in errors
 
     @pytest.mark.parametrize(
@@ -62,7 +62,7 @@ class TestValidateAgentCard:
         """An invalid URL format should be detected."""
         card_data = valid_card_data.copy()
         card_data['url'] = invalid_url
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert (
             "Field 'url' must be an absolute URL starting with http:// or https://."
             in errors
@@ -72,7 +72,7 @@ class TestValidateAgentCard:
         """The 'capabilities' field must be an object."""
         card_data = valid_card_data.copy()
         card_data['capabilities'] = 'not-an-object'
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert "Field 'capabilities' must be an object." in errors
 
     @pytest.mark.parametrize(
@@ -82,7 +82,7 @@ class TestValidateAgentCard:
         """Input/Output modes fields must be arrays."""
         card_data = valid_card_data.copy()
         card_data[field] = 'not-a-list'
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert f"Field '{field}' must be an array of strings." in errors
 
     @pytest.mark.parametrize(
@@ -92,14 +92,14 @@ class TestValidateAgentCard:
         """Input/Output modes arrays must contain only strings."""
         card_data = valid_card_data.copy()
         card_data[field] = [123, 'string']
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert f"All items in '{field}' must be strings." in errors
 
     def test_invalid_skills_type(self, valid_card_data):
         """The 'skills' field must be an array."""
         card_data = valid_card_data.copy()
         card_data['skills'] = 'not-a-list'
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert (
             "Field 'skills' must be an array of AgentSkill objects." in errors
         )
@@ -108,7 +108,7 @@ class TestValidateAgentCard:
         """An empty 'skills' array should produce a warning."""
         card_data = valid_card_data.copy()
         card_data['skills'] = []
-        errors = validators.validate_agent_card(card_data)
+        errors = agent_validators.validate_agent_card(card_data)
         assert (
             "Field 'skills' array is empty. Agent must have at least one skill if it performs actions."
             in errors
@@ -123,50 +123,50 @@ class TestValidateAgentCard:
 class TestValidateMessage:
     def test_missing_kind(self):
         """A message missing the 'kind' field should be detected."""
-        errors = validators.validate_message({})
+        errors = agent_validators.validate_message({})
         assert "Response from agent is missing required 'kind' field." in errors
 
     def test_unknown_kind(self):
         """An unknown message kind should be detected."""
-        errors = validators.validate_message({'kind': 'unknown-kind'})
+        errors = agent_validators.validate_message({'kind': 'unknown-kind'})
         assert "Unknown message kind received: 'unknown-kind'." in errors
 
     # Tests for 'task' kind
     def test_valid_task(self):
         """A valid task message should produce no errors."""
         data = {'kind': 'task', 'id': '123', 'status': {'state': 'running'}}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert not errors
 
     def test_task_missing_id(self):
         """A task message missing 'id' should produce an error."""
         data = {'kind': 'task', 'status': {'state': 'running'}}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Task object missing required field: 'id'." in errors
 
     def test_task_missing_status(self):
         """A task message missing 'status' should produce an error."""
         data = {'kind': 'task', 'id': '123'}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Task object missing required field: 'status.state'." in errors
 
     def test_task_missing_status_state(self):
         """A task message missing 'status.state' should produce an error."""
         data = {'kind': 'task', 'id': '123', 'status': {}}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Task object missing required field: 'status.state'." in errors
 
     # Tests for 'status-update' kind
     def test_valid_status_update(self):
         """A valid status-update message should produce no errors."""
         data = {'kind': 'status-update', 'status': {'state': 'thinking'}}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert not errors
 
     def test_status_update_missing_status(self):
         """A status-update missing 'status' should produce an error."""
         data = {'kind': 'status-update'}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert (
             "StatusUpdate object missing required field: 'status.state'."
             in errors
@@ -175,7 +175,7 @@ class TestValidateMessage:
     def test_status_update_missing_state(self):
         """A status-update missing 'status.state' should produce an error."""
         data = {'kind': 'status-update', 'status': {}}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert (
             "StatusUpdate object missing required field: 'status.state'."
             in errors
@@ -188,13 +188,13 @@ class TestValidateMessage:
             'kind': 'artifact-update',
             'artifact': {'parts': [{'text': 'result'}]},
         }
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert not errors
 
     def test_artifact_update_missing_artifact(self):
         """An artifact-update missing 'artifact' should produce an error."""
         data = {'kind': 'artifact-update'}
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert (
             "ArtifactUpdate object missing required field: 'artifact'."
             in errors
@@ -210,7 +210,7 @@ class TestValidateMessage:
         data = {'kind': 'artifact-update', 'artifact': {}}
         if parts_value is not None:
             data['artifact']['parts'] = parts_value
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Artifact object must have a non-empty 'parts' array." in errors
 
     # Tests for 'message' kind
@@ -221,7 +221,7 @@ class TestValidateMessage:
             'parts': [{'text': 'hello'}],
             'role': 'agent',
         }
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert not errors
 
     @pytest.mark.parametrize(
@@ -234,7 +234,7 @@ class TestValidateMessage:
         data = {'kind': 'message', 'role': 'agent'}
         if parts_value is not None:
             data['parts'] = parts_value
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Message object must have a non-empty 'parts' array." in errors
 
     @pytest.mark.parametrize(
@@ -247,5 +247,5 @@ class TestValidateMessage:
         data = {'kind': 'message', 'parts': [{'text': 'hello'}]}
         if role_value is not None:
             data['role'] = role_value
-        errors = validators.validate_message(data)
+        errors = agent_validators.validate_message(data)
         assert "Message from agent must have 'role' set to 'agent'." in errors

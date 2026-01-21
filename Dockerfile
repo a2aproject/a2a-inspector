@@ -25,7 +25,7 @@ WORKDIR /app
 RUN pip install uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-cache
-RUN uv pip install validators
+
 COPY backend/ ./backend/
 RUN mkdir -p /app/frontend
 COPY --from=frontend-builder /app/public /app/frontend/public

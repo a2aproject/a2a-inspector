@@ -17,6 +17,7 @@ dependencies = [
     "python-socketio",
     "jinja2",
     "bleach>=6.2.0",
+    "validators>=0.35.0",
 ]
 
 [tool.setuptools]
