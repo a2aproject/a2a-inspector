@@ -1,0 +1,207 @@
+/* Enhanced Tool Call and Response Styling for A2A Inspector */
+
+/* Tool Call Styling */
+.tool-call {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-left: 4px solid #5a67d8;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+}
+
+.tool-call .tool-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-call .tool-name {
+  color: #ffd700;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.tool-call .tool-id {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tool-args {
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+.tool-arg {
+  color: #e2e8f0;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 2px 0;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.tool-arg .arg-key {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.tool-arg .arg-value {
+  color: #a5f3fc;
+  margin-left: 4px;
+}
+
+/* Tool Response Styling */
+.tool-response {
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+  border-left: 4px solid #10b981;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  box-shadow: 0 2px 8px rgba(52, 211, 153, 0.15);
+}
+
+.tool-response .tool-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-response .tool-name {
+  color: #fef3c7;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.tool-response .tool-id {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tool-response-content {
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+/* Structured Data Styling */
+.structured-data {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #3b82f6;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.structured-data .data-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.structured-data pre {
+  margin: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.structured-data code {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+/* Dark Mode Support */
+body.dark-mode .tool-call {
+  background: linear-gradient(135deg, #4c51bf 0%, #6b21a8 100%);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+body.dark-mode .tool-response {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  box-shadow: 0 2px 8px rgba(52, 211, 153, 0.3);
+}
+
+body.dark-mode .structured-data {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+body.dark-mode .structured-data .data-header {
+  color: #f1f5f9;
+}
+
+body.dark-mode .structured-data pre {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+body.dark-mode .structured-data code {
+  color: #cbd5e1;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .tool-call,
+  .tool-response,
+  .structured-data {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  .tool-arg,
+  .structured-data code {
+    font-size: 11px;
+  }
+}
+
+/* Animation for new tool calls/responses */
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.tool-call,
+.tool-response,
+.structured-data {
+  animation: slideInFromLeft 0.3s ease-out;
+}
+
+/* Hover effects */
+.tool-call:hover,
+.tool-response:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: all 0.2s ease;
+}
+
+.structured-data:hover {
+  border-left-width: 6px;
+  transition: border-left-width 0.2s ease;
+}
