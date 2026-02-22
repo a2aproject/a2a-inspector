@@ -979,6 +979,59 @@ document.addEventListener('DOMContentLoaded', () => {
     return renderMultimediaContent(dataUri, mimeType);
   };
 
+  const formatFunctionCall = (dataObj: any): string => {
+    const name = DOMPurify.sanitize(dataObj.name || 'unknown');
+    const id = dataObj.id ? ` <span class="tool-id">(${DOMPurify.sanitize(dataObj.id)})</span>` : '';
+    const args = dataObj.args || {};
+    
+    let argsHtml = '';
+    if (Object.keys(args).length > 0) {
+      const argsList = Object.entries(args)
+        .map(([key, value]) => {
+          const sanitizedKey = DOMPurify.sanitize(key);
+          const sanitizedValue = DOMPurify.sanitize(JSON.stringify(value));
+          return `<div class="tool-arg">├─ <span class="arg-key">${sanitizedKey}:</span> <span class="arg-value">${sanitizedValue}</span></div>`;
+        })
+        .join('');
+      argsHtml = `<div class="tool-args">${argsList}</div>`;
+    }
+    
+    return `<div class="tool-call">
+      <div class="tool-header">🔧 <strong>Tool Call:</strong> <span class="tool-name">${name}</span>${id}</div>
+      ${argsHtml}
+    </div>`;
+  };
+
+  const formatFunctionResponse = (dataObj: any): string => {
+    const name = DOMPurify.sanitize(dataObj.name || 'unknown');
+    const id = dataObj.id ? ` <span class="tool-id">(${DOMPurify.sanitize(dataObj.id)})</span>` : '';
+    const response = dataObj.response || {};
+    
+    let responseHtml = '';
+    if (Object.keys(response).length > 0) {
+      const responseList = Object.entries(response)
+        .map(([key, value]) => {
+          const sanitizedKey = DOMPurify.sanitize(key);
+          const sanitizedValue = DOMPurify.sanitize(JSON.stringify(value, null, 2));
+          return `<div class="tool-arg">└─ <span class="arg-key">${sanitizedKey}:</span> <span class="arg-value">${sanitizedValue}</span></div>`;
+        })
+        .join('');
+      responseHtml = `<div class="tool-response-content">${responseList}</div>`;
+    }
+    
+    return `<div class="tool-response">
+      <div class="tool-header">✅ <strong>Tool Response:</strong> <span class="tool-name">${name}</span>${id}</div>
+      ${responseHtml}
+    </div>`;
+  };
+
+  const formatStructuredData = (data: any): string => {
+    return `<div class="structured-data">
+      <div class="data-header">📊 <strong>Data:</strong></div>
+      <pre><code class="language-json">${DOMPurify.sanitize(JSON.stringify(data, null, 2))}</code></pre>
+    </div>`;
+  };
+
   const processPart = (p: any): string | null => {
     if (p.text) {
       return DOMPurify.sanitize(marked.parse(p.text) as string);
@@ -991,11 +1044,24 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else if (p.data) {
       const dataObj = p.data as any;
+      
+      // Check if this is a function call
+      if (dataObj.name && dataObj.args !== undefined) {
+        return formatFunctionCall(dataObj);
+      }
+      
+      // Check if this is a function response
+      if (dataObj.name && dataObj.response !== undefined) {
+        return formatFunctionResponse(dataObj);
+      }
+      
+      // Check for embedded media
       if (dataObj.mimeType && typeof dataObj.data === 'string') {
         return renderBase64Data(dataObj.data, dataObj.mimeType);
-      } else {
-        return `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
       }
+      
+      // Generic structured data
+      return formatStructuredData(dataObj);
     }
     return null;
   };
@@ -1069,12 +1135,17 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       }
       case 'status-update': {
-        const statusText = event.status?.message?.parts?.[0]?.text;
-        if (statusText) {
-          const renderedContent = DOMPurify.sanitize(
-            marked.parse(statusText) as string,
-          );
-          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> Server responded with: ${renderedContent}`;
+        // Process ALL parts, not just text!
+        const allContent: string[] = [];
+        event.status?.message?.parts?.forEach(p => {
+          const content = processPart(p);
+          if (content) allContent.push(content);
+        });
+        
+        if (allContent.length > 0) {
+          const combinedContent = allContent.join('');
+          const kindChip = `<span class="kind-chip kind-chip-status-update">${event.kind}</span>`;
+          const messageHtml = `${kindChip} ${combinedContent}`;
           appendMessage(
             'agent progress',
             messageHtml,
