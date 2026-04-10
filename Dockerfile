@@ -1,5 +1,5 @@
 # Stage 1: Build the frontend assets
-FROM node:18-alpine AS frontend-builder
+FROM node:22-slim AS frontend-builder
 WORKDIR /app
 
 # Copy package files and configuration needed for npm ci
@@ -12,10 +12,6 @@ RUN npm ci
 
 # Copy remaining files
 COPY frontend/ ./
-
-# Rebuild native dependencies like esbuild for the container's architecture (Alpine)
-# in case host node_modules were copied over.
-RUN npm rebuild esbuild
 
 RUN npm run build
 
