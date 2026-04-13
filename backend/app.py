@@ -8,7 +8,6 @@ from uuid import uuid4
 import bleach
 import httpx
 import socketio
-
 import validators
 
 from a2a.client import A2ACardResolver
@@ -20,15 +19,13 @@ from a2a.types import (
     Part,
     Role,
     SendMessageRequest,
-    Task,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent,
 )
-from google.protobuf.json_format import MessageToDict
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from google.protobuf.json_format import MessageToDict
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatibility: TransportProtocol moved and enum values changed.
@@ -42,7 +39,9 @@ try:
     _TP_GRPC = TransportProtocol.GRPC
 except (ImportError, AttributeError):
     # Fall back to legacy import path (a2a-sdk < 1.0)
-    from a2a.types import TransportProtocol  # type: ignore[no-redef]
+    from a2a.types import (  # type: ignore[attr-defined,no-redef]
+        TransportProtocol,
+    )
     _TP_JSONRPC = TransportProtocol.jsonrpc  # type: ignore[attr-defined]
     try:
         _TP_HTTP_JSON = TransportProtocol.http_json  # type: ignore[attr-defined]
@@ -270,7 +269,7 @@ def _normalize_task_state(data: dict[str, Any]) -> None:
 
     We normalize to lowercase for backward compat with the frontend.
     """
-    _TASK_STATE_MAP = {
+    task_state_map = {
         'TASK_STATE_UNSPECIFIED': 'unknown',
         'TASK_STATE_SUBMITTED': 'submitted',
         'TASK_STATE_WORKING': 'working',
@@ -284,8 +283,8 @@ def _normalize_task_state(data: dict[str, Any]) -> None:
     }
     if 'status' in data and isinstance(data['status'], dict):
         state = data['status'].get('state')
-        if isinstance(state, str) and state in _TASK_STATE_MAP:
-            data['status']['state'] = _TASK_STATE_MAP[state]
+        if isinstance(state, str) and state in task_state_map:
+            data['status']['state'] = task_state_map[state]
         elif isinstance(state, int):
             # Protobuf serializes enums as ints sometimes
             int_map = {
@@ -381,9 +380,11 @@ def _make_text_part(text: str) -> Any:
             pass
     # v0.3 fallback
     try:
-        from a2a.types import TextPart  # type: ignore[import]
-        PartCompat = Part  # type: ignore[misc]
-        return PartCompat(root=TextPart(text=text))  # type: ignore[call-arg]
+        from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
+            TextPart,
+        )
+        part_compat = Part
+        return part_compat(root=TextPart(text=text))  # type: ignore[call-arg]
     except (TypeError, ImportError, AttributeError):
         return Part(text=text)
 
@@ -400,7 +401,10 @@ def _make_file_part(data: str, mime_type: str) -> Any:
             pass
     # v0.3 fallback
     try:
-        from a2a.types import FilePart, FileWithBytes  # type: ignore[import]
+        from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
+            FilePart,
+            FileWithBytes,
+        )
         return FilePart(file=FileWithBytes(bytes=data, mime_type=mime_type))  # type: ignore[call-arg]
     except (TypeError, ImportError, AttributeError):
         return Part(raw=base64.b64decode(data), media_type=mime_type)  # type: ignore[call-arg]

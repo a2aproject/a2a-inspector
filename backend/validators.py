@@ -49,11 +49,12 @@ _V03_TASK_STATES = frozenset({
 def _is_valid_task_state(state: Any) -> bool:
     """Return True if the state value is a known v0.3 or v1.0 task state."""
     if isinstance(state, int):
-        return 0 <= state <= 8  # TASK_STATE_UNSPECIFIED..TASK_STATE_AUTH_REQUIRED
+        # 0..8 correspond to TASK_STATE_UNSPECIFIED..TASK_STATE_AUTH_REQUIRED
+        return 0 <= state <= 8  # noqa: PLR2004
     return str(state) in _V1_TASK_STATES or str(state) in _V03_TASK_STATES
 
 
-def validate_agent_card(card_data: dict[str, Any]) -> list[str]:
+def validate_agent_card(card_data: dict[str, Any]) -> list[str]:  # noqa: PLR0912
     """Validate the structure and fields of an agent card.
 
     Accepts both v0.3 (has top-level 'url') and v1.0 (has 'supportedInterfaces')
@@ -78,7 +79,7 @@ def validate_agent_card(card_data: dict[str, Any]) -> list[str]:
         url = card_data['url']
         if not (
             isinstance(url, str)
-            and (url.startswith('http://') or url.startswith('https://'))
+            and url.startswith(('http://', 'https://'))
         ):
             errors.append(
                 "Field 'url' must be an absolute URL starting with http:// or https://."
