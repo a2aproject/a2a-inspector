@@ -53,7 +53,11 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 # NOTE: In a production environment, cors_allowed_origins should be restricted
 # to the specific frontend domain, not a wildcard '*'.
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    max_http_buffer_size=10 * 1024 * 1024,  # 10MB, to support large file uploads
+)
 socket_app = socketio.ASGIApp(sio)
 app.mount('/socket.io', socket_app)
 
