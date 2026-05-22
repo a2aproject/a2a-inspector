@@ -1102,12 +1102,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         break;
       case 'message': {
-        const textPart = event.parts?.find(p => p.text);
-        if (textPart && textPart.text) {
-          const renderedContent = DOMPurify.sanitize(
-            marked.parse(textPart.text) as string,
-          );
-          const messageHtml = `<span class="kind-chip kind-chip-message">${event.kind}</span> ${renderedContent}`;
+        const allContent: string[] = [];
+        event.parts?.forEach(p => {
+          const content = processPart(p);
+          if (content) allContent.push(content);
+        });
+        if (allContent.length > 0) {
+          const combinedContent = allContent.join('');
+          const messageHtml = `<span class="kind-chip kind-chip-message">${event.kind}</span> ${combinedContent}`;
           appendMessage(
             'agent',
             messageHtml,
