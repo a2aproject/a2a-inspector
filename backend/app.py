@@ -34,6 +34,7 @@ from google.protobuf.json_format import MessageToDict
 # ---------------------------------------------------------------------------
 try:
     from a2a.utils.constants import TransportProtocol
+
     _TP_JSONRPC = TransportProtocol.JSONRPC
     _TP_HTTP_JSON = TransportProtocol.HTTP_JSON
     _TP_GRPC = TransportProtocol.GRPC
@@ -42,6 +43,7 @@ except (ImportError, AttributeError):
     from a2a.types import (  # type: ignore[attr-defined,no-redef]
         TransportProtocol,
     )
+
     _TP_JSONRPC = TransportProtocol.jsonrpc  # type: ignore[attr-defined]
     try:
         _TP_HTTP_JSON = TransportProtocol.http_json  # type: ignore[attr-defined]
@@ -112,7 +114,7 @@ def _to_dict(obj: Any) -> dict[str, Any]:
         return obj.model_dump(exclude_none=True)
     if isinstance(obj, dict):
         return obj
-    raise TypeError(f"Cannot serialize {type(obj).__name__} to dict")
+    raise TypeError(f'Cannot serialize {type(obj).__name__} to dict')
 
 
 def _get_agent_card_dict(card: AgentCard) -> dict[str, Any]:
@@ -133,7 +135,9 @@ def _get_transport_from_card(card: AgentCard) -> str:
         if hasattr(card, 'supported_interfaces') and card.supported_interfaces:
             iface = card.supported_interfaces[0]
             # v1.0 uses protocol_binding; some compat layers may use transport
-            binding = getattr(iface, 'protocol_binding', None) or getattr(iface, 'transport', None)
+            binding = getattr(iface, 'protocol_binding', None) or getattr(
+                iface, 'transport', None
+            )
             if binding:
                 return str(binding)
     except (IndexError, AttributeError):
@@ -231,9 +235,11 @@ async def _process_a2a_response(
         # Direct message (non-streaming path in v0.3)
         event = client_event
 
-    response_id = getattr(event, 'id', None) or getattr(
-        event, 'task_id', request_id
-    ) or request_id
+    response_id = (
+        getattr(event, 'id', None)
+        or getattr(event, 'task_id', request_id)
+        or request_id
+    )
 
     # Serialize
     response_data = _to_dict(event)
@@ -383,6 +389,7 @@ def _make_text_part(text: str) -> Any:
         from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
             TextPart,
         )
+
         part_compat = Part
         return part_compat(root=TextPart(text=text))  # type: ignore[call-arg]
     except (TypeError, ImportError, AttributeError):
@@ -405,6 +412,7 @@ def _make_file_part(data: str, mime_type: str) -> Any:
             FilePart,
             FileWithBytes,
         )
+
         return FilePart(file=FileWithBytes(bytes=data, mime_type=mime_type))  # type: ignore[call-arg]
     except (TypeError, ImportError, AttributeError):
         return Part(raw=base64.b64decode(data), media_type=mime_type)  # type: ignore[call-arg]
@@ -628,7 +636,9 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         parts.append(_make_text_part(str(message_text)))
 
     for attachment in attachments:
-        parts.append(_make_file_part(attachment['data'], attachment['mimeType']))
+        parts.append(
+            _make_file_part(attachment['data'], attachment['mimeType'])
+        )
 
     message = _make_message(
         role=_get_role_user(),

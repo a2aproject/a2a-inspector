@@ -18,32 +18,36 @@ from typing import Any
 
 
 # v1.0 SCREAMING_SNAKE_CASE task states (from protobuf enum name mapping)
-_V1_TASK_STATES = frozenset({
-    'TASK_STATE_UNSPECIFIED',
-    'TASK_STATE_SUBMITTED',
-    'TASK_STATE_WORKING',
-    'TASK_STATE_COMPLETED',
-    'TASK_STATE_FAILED',
-    'TASK_STATE_CANCELED',
-    'TASK_STATE_CANCELLED',
-    'TASK_STATE_INPUT_REQUIRED',
-    'TASK_STATE_REJECTED',
-    'TASK_STATE_AUTH_REQUIRED',
-})
+_V1_TASK_STATES = frozenset(
+    {
+        'TASK_STATE_UNSPECIFIED',
+        'TASK_STATE_SUBMITTED',
+        'TASK_STATE_WORKING',
+        'TASK_STATE_COMPLETED',
+        'TASK_STATE_FAILED',
+        'TASK_STATE_CANCELED',
+        'TASK_STATE_CANCELLED',
+        'TASK_STATE_INPUT_REQUIRED',
+        'TASK_STATE_REJECTED',
+        'TASK_STATE_AUTH_REQUIRED',
+    }
+)
 
 # v0.3 lowercase task states
-_V03_TASK_STATES = frozenset({
-    'unknown',
-    'submitted',
-    'working',
-    'completed',
-    'failed',
-    'canceled',
-    'cancelled',
-    'input-required',
-    'rejected',
-    'auth-required',
-})
+_V03_TASK_STATES = frozenset(
+    {
+        'unknown',
+        'submitted',
+        'working',
+        'completed',
+        'failed',
+        'canceled',
+        'cancelled',
+        'input-required',
+        'rejected',
+        'auth-required',
+    }
+)
 
 
 def _is_valid_task_state(state: Any) -> bool:
@@ -78,8 +82,7 @@ def validate_agent_card(card_data: dict[str, Any]) -> list[str]:  # noqa: PLR091
     elif has_url:
         url = card_data['url']
         if not (
-            isinstance(url, str)
-            and url.startswith(('http://', 'https://'))
+            isinstance(url, str) and url.startswith(('http://', 'https://'))
         ):
             errors.append(
                 "Field 'url' must be an absolute URL starting with http:// or https://."
@@ -172,7 +175,9 @@ def _validate_artifact_update(data: dict[str, Any]) -> list[str]:
         artifact = data.get('artifact', {})
         parts = artifact.get('parts', [])
         if not isinstance(parts, list) or not parts:
-            errors.append("Artifact object must have a non-empty 'parts' array.")
+            errors.append(
+                "Artifact object must have a non-empty 'parts' array."
+            )
     return errors
 
 

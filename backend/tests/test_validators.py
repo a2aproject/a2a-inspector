@@ -35,7 +35,13 @@ def valid_card_data_v10():
         'capabilities': {'streaming': True, 'pushNotifications': False},
         'defaultInputModes': ['text/plain'],
         'defaultOutputModes': ['text/plain'],
-        'skills': [{'id': 'test_skill', 'name': 'test_skill', 'description': 'A test skill'}],
+        'skills': [
+            {
+                'id': 'test_skill',
+                'name': 'test_skill',
+                'description': 'A test skill',
+            }
+        ],
         'supportedInterfaces': [
             {'url': 'https://example.com/a2a', 'transport': 'JSONRPC'},
         ],
@@ -80,7 +86,7 @@ class TestValidateAgentCardV03:
         card_data = valid_card_data.copy()
         del card_data['url']
         errors = validators.validate_agent_card(card_data)
-        assert any("url" in e or "supportedInterfaces" in e for e in errors)
+        assert any('url' in e or 'supportedInterfaces' in e for e in errors)
 
     @pytest.mark.parametrize(
         'invalid_url',
@@ -149,35 +155,35 @@ class TestValidateAgentCardV10:
     def test_valid_v10_card(self, valid_card_data_v10):
         """A valid v1.0 agent card should produce no validation errors."""
         errors = validators.validate_agent_card(valid_card_data_v10)
-        assert not errors, f"Unexpected errors: {errors}"
+        assert not errors, f'Unexpected errors: {errors}'
 
     def test_v10_card_missing_name(self, valid_card_data_v10):
         """v1.0 card missing 'name' should error."""
         card = valid_card_data_v10.copy()
         del card['name']
         errors = validators.validate_agent_card(card)
-        assert any("name" in e for e in errors)
+        assert any('name' in e for e in errors)
 
     def test_v10_supported_interfaces_missing_url(self, valid_card_data_v10):
         """v1.0 supportedInterfaces entry missing 'url' should error."""
         card = valid_card_data_v10.copy()
         card['supportedInterfaces'] = [{'transport': 'JSONRPC'}]
         errors = validators.validate_agent_card(card)
-        assert any("url" in e for e in errors)
+        assert any('url' in e for e in errors)
 
     def test_v10_empty_supported_interfaces(self, valid_card_data_v10):
         """v1.0 empty supportedInterfaces should error."""
         card = valid_card_data_v10.copy()
         card['supportedInterfaces'] = []
         errors = validators.validate_agent_card(card)
-        assert any("supportedInterfaces" in e for e in errors)
+        assert any('supportedInterfaces' in e for e in errors)
 
     def test_v10_no_url_no_supported_interfaces(self, valid_card_data_v10):
         """v1.0 card with neither url nor supportedInterfaces should error."""
         card = valid_card_data_v10.copy()
         del card['supportedInterfaces']
         errors = validators.validate_agent_card(card)
-        assert any("url" in e or "supportedInterfaces" in e for e in errors)
+        assert any('url' in e or 'supportedInterfaces' in e for e in errors)
 
 
 # ==============================================================================
@@ -205,7 +211,11 @@ class TestValidateMessage:
 
     def test_valid_task_v10(self):
         """A valid v1.0 task message (SCREAMING_SNAKE_CASE state) should produce no errors."""
-        data = {'kind': 'task', 'id': '123', 'status': {'state': 'TASK_STATE_WORKING'}}
+        data = {
+            'kind': 'task',
+            'id': '123',
+            'status': {'state': 'TASK_STATE_WORKING'},
+        }
         errors = validators.validate_message(data)
         assert not errors
 
