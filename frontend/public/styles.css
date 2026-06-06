@@ -56,6 +56,10 @@ body.dark-mode .container {
     color: var(--text-primary);
 }
 
+body.dark-mode .left-panel {
+    border-right-color: var(--border-color);
+}
+
 body.dark-mode h1,
 body.dark-mode h2 {
     color: #f0f0f0;
@@ -155,12 +159,37 @@ body.dark-mode .chat-info {
 }
 
 .container {
-    max-width: 960px;
-    margin: 0 auto 100px auto;
+    width: 100%;
+    max-width: 100%;
+    margin: 0 0 100px 0;
     background: #fff;
-    padding: 20px;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.layout-columns {
+    display: flex;
+    align-items: stretch;
+    min-height: calc(100vh - 80px);
+}
+
+.left-panel {
+    width: 30%;
+    flex-shrink: 0;
+    padding: 20px;
+    border-right: 1px solid var(--border-color);
+    box-sizing: border-box;
+    overflow-y: auto;
+}
+
+.right-panel {
+    width: 70%;
+    flex: 1;
+    padding: 20px;
+    box-sizing: border-box;
+    overflow-y: auto;
 }
 
 h1 {
@@ -287,18 +316,27 @@ body.dark-mode input:checked + .slider {
     max-height: 0;
 }
 
-#agent-card-section,
-#chat-container {
+#agent-card-section {
     margin-top: 20px;
     border-top: 1px solid #ddd;
     padding-top: 20px;
 }
 
-.url-input-container,
+#chat-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.url-input-container {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
 .chat-input-container {
     display: flex;
     gap: 10px;
-    margin-bottom: 60px;
 }
 
 .connect-btn-container {
@@ -949,7 +987,8 @@ body.dark-mode .loading-spinner {
 }
 
 #chat-messages {
-    height: 300px;
+    flex: 1;
+    min-height: 300px;
     overflow-y: auto;
     border: 1px solid #ddd;
     padding: 10px;

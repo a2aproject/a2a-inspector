@@ -56,7 +56,7 @@ app = FastAPI()
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',
-    max_http_buffer_size=10 * 1024 * 1024,  # 10MB, to support large file uploads
+    max_http_buffer_size=50 * 1024 * 1024,  # 50MB, to support large file uploads
 )
 socket_app = socketio.ASGIApp(sio)
 app.mount('/socket.io', socket_app)
