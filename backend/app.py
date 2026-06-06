@@ -390,4 +390,4 @@ if __name__ == '__main__':
 
     # NOTE: The 'reload=True' flag is for development purposes only.
     # In a production environment, use a proper process manager like Gunicorn.
-    uvicorn.run('app:app', host='127.0.0.1', port=5001, reload=True)
+    uvicorn.run('app:app', host='0.0.0.0', port=5001, reload=True)
