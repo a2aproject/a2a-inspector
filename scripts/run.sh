@@ -3,12 +3,20 @@
 # Script to run A2A Inspector frontend and backend simultaneously
 # Both processes will be monitored and killed when the script exits
 
-# Colors for output
-RED=$(tput setaf 1)
-GREEN=$(tput setaf 2)
-YELLOW=$(tput setaf 3)
-BLUE=$(tput setaf 4)
-NC=$(tput sgr0) # No Color / Reset
+# Colors for output (disabled if no terminal)
+if [ -t 1 ] && [ -n "$TERM" ]; then
+    RED=$(tput setaf 1)
+    GREEN=$(tput setaf 2)
+    YELLOW=$(tput setaf 3)
+    BLUE=$(tput setaf 4)
+    NC=$(tput sgr0)
+else
+    RED=""
+    GREEN=""
+    YELLOW=""
+    BLUE=""
+    NC=""
+fi
 
 # Function to cleanup processes on exit
 cleanup() {
@@ -54,7 +62,7 @@ echo -e "${GREEN}Starting A2A Inspector...${NC}"
 # Start frontend build in watch mode
 echo -e "${BLUE}Starting frontend build (watch mode)...${NC}"
 cd ./frontend || exit
-npm run build -- --watch 2>&1 | sed "s/^/\\x1b[36m[FRONTEND]\\x1b[0m /" &
+npm run build -- --watch=forever 2>&1 | sed "s/^/\\x1b[36m[FRONTEND]\\x1b[0m /" &
 FRONTEND_PID=$!
 cd - > /dev/null || exit
 
