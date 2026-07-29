@@ -1,7 +1,7 @@
 import base64
 import logging
-from importlib import import_module
 
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
