@@ -51,7 +51,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
-FRONTEND_PUBLIC_DIR = Path(__file__).resolve().parent.parent / 'frontend' / 'public'
+FRONTEND_PUBLIC_DIR = (
+    Path(__file__).resolve().parent.parent / 'frontend' / 'public'
+)
 
 app = FastAPI()
 # NOTE: In a production environment, cors_allowed_origins should be restricted
@@ -125,7 +127,9 @@ def _unwrap_stream_event(client_event: Any) -> tuple[Any, str | None]:
     return event, payload_name
 
 
-def _message_parts(message_text: str, attachments: list[dict[str, Any]]) -> list[Part]:
+def _message_parts(
+    message_text: str, attachments: list[dict[str, Any]]
+) -> list[Part]:
     parts: list[Part] = []
     if message_text:
         parts.append(Part(text=message_text))
