@@ -1,5 +1,7 @@
+import base64
 import logging
 
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -7,27 +9,27 @@ from uuid import uuid4
 import bleach
 import httpx
 import socketio
-import validators
 
-from a2a.client import A2ACardResolver
-from a2a.client.client import Client, ClientConfig, ClientEvent
-from a2a.client.client_factory import ClientFactory
+from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
 from a2a.types import (
     AgentCard,
-    FilePart,
-    FileWithBytes,
     Message,
+    Part,
     Role,
-    Task,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent,
-    TextPart,
-    TransportProtocol,
+    SendMessageRequest,
 )
+from a2a.utils.constants import TransportProtocol
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from google.protobuf.json_format import MessageToDict
+
+
+try:
+    from backend import validators
+except ImportError:
+    import validators
 
 
 STANDARD_HEADERS = {
@@ -49,6 +51,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
+FRONTEND_PUBLIC_DIR = Path(__file__).resolve().parent.parent / 'frontend' / 'public'
 
 app = FastAPI()
 # NOTE: In a production environment, cors_allowed_origins should be restricted
@@ -57,8 +60,8 @@ sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 socket_app = socketio.ASGIApp(sio)
 app.mount('/socket.io', socket_app)
 
-app.mount('/static', StaticFiles(directory='../frontend/public'), name='static')
-templates = Jinja2Templates(directory='../frontend/public')
+app.mount('/static', StaticFiles(directory=FRONTEND_PUBLIC_DIR), name='static')
+templates = Jinja2Templates(directory=FRONTEND_PUBLIC_DIR)
 
 # ==============================================================================
 # State Management
@@ -84,34 +87,96 @@ async def _emit_debug_log(
     )
 
 
-async def _process_a2a_response(
-    client_event: ClientEvent | Message,
-    sid: str,
-    request_id: str,
-) -> None:
-    """Processes a response from the A2A client, validates it, and emits events.
+def _normalize_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        normalized = {key: _normalize_json(val) for key, val in value.items()}
+        role = normalized.get('role')
+        if isinstance(role, str) and role.startswith('ROLE_'):
+            normalized['role'] = role.removeprefix('ROLE_').lower()
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_json(item) for item in value]
+    return value
 
-    This function handles the incoming ClientEvent or Message object,
-    correlating it with the original request using the session ID and request ID.
 
-    Args:
-    client_event: The event or message received.
-    sid: The session ID associated with the original request.
-    request_id: The unique ID of the original request.
-    """
-    # The response payload 'event' (Task, Message, etc.) may have its own 'id',
-    # which can differ from the JSON-RPC request/response 'id'. We prioritize
-    # the payload's ID for client-side correlation if it exists.
-
-    event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | Task | Message
-    if isinstance(client_event, tuple):
-        event = client_event[1] if client_event[1] else client_event[0]
+def _to_json(value: Any) -> dict[str, Any]:
+    if hasattr(value, 'model_dump'):
+        data = value.model_dump(exclude_none=True)
     else:
-        event = client_event
+        data = MessageToDict(
+            value,
+            preserving_proto_field_name=False,
+            use_integers_for_enums=False,
+        )
+    return _normalize_json(data)
 
-    response_id = getattr(event, 'id', request_id)
 
-    response_data = event.model_dump(exclude_none=True)
+def _unwrap_stream_event(client_event: Any) -> tuple[Any, str | None]:
+    event = client_event[1] if isinstance(client_event, tuple) else client_event
+    if isinstance(client_event, tuple) and event is None:
+        event = client_event[0]
+
+    payload_name = None
+    if hasattr(event, 'WhichOneof'):
+        payload_name = event.WhichOneof('payload')
+        if payload_name:
+            event = getattr(event, payload_name)
+
+    return event, payload_name
+
+
+def _message_parts(message_text: str, attachments: list[dict[str, Any]]) -> list[Part]:
+    parts: list[Part] = []
+    if message_text:
+        parts.append(Part(text=message_text))
+
+    for attachment in attachments:
+        parts.append(
+            Part(
+                raw=base64.b64decode(attachment['data']),
+                filename=attachment.get('name'),
+                media_type=attachment.get(
+                    'mimeType', 'application/octet-stream'
+                ),
+            )
+        )
+
+    return parts
+
+
+def _build_send_message_request(
+    message_text: str,
+    message_id: str,
+    context_id: str | None,
+    metadata: dict[str, Any],
+    attachments: list[dict[str, Any]],
+) -> SendMessageRequest:
+    message = Message(
+        role=Role.ROLE_USER,
+        parts=_message_parts(message_text, attachments),
+        message_id=message_id,
+        context_id=context_id,
+        metadata=metadata,
+    )
+    return SendMessageRequest(message=message, metadata=metadata)
+
+
+async def _process_a2a_response(
+    client_event: Any, sid: str, request_id: str
+) -> None:
+    """Processes a response from the A2A client and emits inspector events."""
+    event, payload_name = _unwrap_stream_event(client_event)
+    response_data = _to_json(event)
+
+    if payload_name:
+        response_data['kind'] = payload_name.replace('_', '-')
+
+    response_id = (
+        response_data.get('id')
+        or response_data.get('messageId')
+        or response_data.get('taskId')
+        or request_id
+    )
     response_data['id'] = response_id
 
     validation_errors = validators.validate_message(response_data)
@@ -199,7 +264,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
             card_resolver = get_card_resolver(client, agent_url)
             card = await card_resolver.get_agent_card()
 
-        card_data = card.model_dump(exclude_none=True)
+        card_data = _to_json(card)
         validation_errors = validators.validate_agent_card(card_data)
         response_data = {
             'card': card_data,
@@ -271,31 +336,46 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         card = await card_resolver.get_agent_card()
 
         a2a_config = ClientConfig(
-            supported_transports=[
-                TransportProtocol.jsonrpc,
-                TransportProtocol.http_json,
-                TransportProtocol.jsonrpc,
-                TransportProtocol.grpc,
+            supported_protocol_bindings=[
+                TransportProtocol.JSONRPC.value,
+                TransportProtocol.HTTP_JSON.value,
+                TransportProtocol.GRPC.value,
             ],
             use_client_preference=True,
             httpx_client=httpx_client,
         )
         factory = ClientFactory(a2a_config)
         a2a_client = factory.create(card)
-        transport_protocol = (
-            card.preferred_transport or TransportProtocol.jsonrpc
+        transport_protocol = next(
+            (
+                protocol
+                for protocol in [
+                    TransportProtocol.JSONRPC.value,
+                    TransportProtocol.HTTP_JSON.value,
+                    TransportProtocol.GRPC.value,
+                ]
+                if any(
+                    interface.protocol_binding == protocol
+                    for interface in card.supported_interfaces
+                )
+            ),
+            TransportProtocol.JSONRPC.value,
         )
 
         clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
 
-        input_modes = getattr(card, 'default_input_modes', ['text/plain'])
-        output_modes = getattr(card, 'default_output_modes', ['text/plain'])
+        input_modes = list(getattr(card, 'default_input_modes', [])) or [
+            'text/plain'
+        ]
+        output_modes = list(getattr(card, 'default_output_modes', [])) or [
+            'text/plain'
+        ]
 
         await sio.emit(
             'client_initialized',
             {
                 'status': 'success',
-                'transport': str(transport_protocol),
+                'transport': transport_protocol,
                 'inputModes': input_modes,
                 'outputModes': output_modes,
             },
@@ -333,37 +413,19 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     _, a2a_client, _, transport = clients[sid]
 
     attachments = json_data.get('attachments', [])
-
-    parts: list = []
-    if message_text:
-        parts.append(TextPart(text=str(message_text)))  # type: ignore[arg-type]
-
-    for attachment in attachments:
-        parts.append(
-            FilePart(  # type: ignore[arg-type]
-                file=FileWithBytes(
-                    bytes=attachment['data'], mime_type=attachment['mimeType']
-                )
-            )
-        )
-
-    message = Message(
-        role=Role.user,
-        parts=parts,
-        message_id=message_id,
-        context_id=context_id,
-        metadata=metadata,
+    request = _build_send_message_request(
+        message_text, message_id, context_id, metadata, attachments
     )
 
     debug_request = {
         'transport': transport,
         'method': 'message/send',
-        'message': message.model_dump(exclude_none=True),
+        'message': _to_json(request.message),
     }
     await _emit_debug_log(sid, message_id, 'request', debug_request)
 
     try:
-        response_stream = a2a_client.send_message(message)
+        response_stream = a2a_client.send_message(request)
         async for stream_result in response_stream:
             await _process_a2a_response(stream_result, sid, message_id)
 
