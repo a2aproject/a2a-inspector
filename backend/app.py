@@ -11,7 +11,7 @@ import socketio
 import validators
 
 from a2a.client import A2ACardResolver
-from a2a.client.client import Client, ClientConfig, ClientEvent
+from a2a.client.client import Client, ClientConfig
 from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
@@ -189,15 +189,52 @@ def _extract_context_id_from_event(event: Any) -> str | None:
     return None
 
 
+def _unwrap_stream_response(client_event: Any) -> object:
+    """Unwrap a StreamResponse or legacy ClientEvent into the inner payload.
+
+    Supports:
+    - a2a-sdk stable 1.0.x+: StreamResponse protobuf yielded directly
+    - a2a-sdk v1.0 alpha: tuple[StreamResponse, Task | None]
+    - a2a-sdk v0.3: tuple[TaskStatusUpdateEvent | TaskArtifactUpdateEvent, Task] | Message
+    """
+    payload_fields = ('task', 'message', 'status_update', 'artifact_update')
+
+    if hasattr(client_event, 'DESCRIPTOR') and hasattr(
+        client_event, 'WhichOneof'
+    ):
+        # Stable SDK: StreamResponse protobuf yielded directly
+        which = client_event.WhichOneof('payload')
+        return (
+            getattr(client_event, which)
+            if which in payload_fields
+            else client_event
+        )
+
+    if isinstance(client_event, tuple):
+        stream_response, task = client_event[0], client_event[1]
+        if hasattr(stream_response, 'DESCRIPTOR'):
+            # v1.0 alpha: protobuf tuple
+            which = stream_response.WhichOneof('payload')
+            if which in payload_fields:
+                return getattr(stream_response, which)
+            return task if task is not None else stream_response
+        # v0.3: first element is the streaming event
+        return stream_response
+
+    # v0.3 direct message (non-streaming)
+    return client_event
+
+
 async def _process_a2a_response(
-    client_event: ClientEvent | Any,
+    client_event: Any,
     sid: str,
     request_id: str,
 ) -> None:
     """Processes a response from the A2A client, validates it, and emits events.
 
-    Supports both:
-    - a2a-sdk v1.0: ClientEvent = tuple[StreamResponse, Task | None]
+    Supports:
+    - a2a-sdk stable 1.0.x+: send_message yields StreamResponse directly
+    - a2a-sdk v1.0 alpha: ClientEvent = tuple[StreamResponse, Task | None]
     - a2a-sdk v0.3: ClientEvent = tuple[TaskStatusUpdateEvent | TaskArtifactUpdateEvent, Task] | Message
 
     Args:
@@ -206,34 +243,7 @@ async def _process_a2a_response(
         request_id: The unique ID of the original request.
     """
     # --- Unwrap the client_event ---
-    # v1.0: (StreamResponse, Task | None)
-    # v0.3: (TaskStatusUpdateEvent | TaskArtifactUpdateEvent, Task) | Message
-    event: object  # Union of TaskStatusUpdateEvent, TaskArtifactUpdateEvent, or Message
-
-    if isinstance(client_event, tuple):
-        stream_response, task = client_event[0], client_event[1]
-
-        # v1.0 path: StreamResponse has .WhichOneof('payload')
-        if hasattr(stream_response, 'DESCRIPTOR'):
-            # Protobuf StreamResponse
-            which = stream_response.WhichOneof('payload')
-            if which == 'task':
-                event = stream_response.task
-            elif which == 'message':
-                event = stream_response.message
-            elif which == 'status_update':
-                event = stream_response.status_update
-            elif which == 'artifact_update':
-                event = stream_response.artifact_update
-            else:
-                # Fall back to the aggregated task if available
-                event = task if task is not None else stream_response
-        else:
-            # v0.3 path: first element is the streaming event
-            event = stream_response
-    else:
-        # Direct message (non-streaming path in v0.3)
-        event = client_event
+    event: object = _unwrap_stream_response(client_event)
 
     response_id = (
         getattr(event, 'id', None)
