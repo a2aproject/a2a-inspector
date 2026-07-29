@@ -371,7 +371,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         factory = ClientFactory(a2a_config)
         a2a_client = factory.create(card)
         server_transports = {
-            card.preferred_transport or TransportProtocol.jsonrpc.value: card.url
+            card.preferred_transport
+            or TransportProtocol.jsonrpc.value: card.url
         }
         if card.additional_interfaces:
             server_transports.update(
