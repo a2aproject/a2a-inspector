@@ -1,4 +1,3 @@
-import base64
 import logging
 
 from importlib import import_module
@@ -14,12 +13,15 @@ import socketio
 from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
 from a2a.types import (
     AgentCard,
+    FilePart,
+    FileWithBytes,
+    FileWithUri,
     Message,
     Part,
     Role,
-    SendMessageRequest,
+    TextPart,
+    TransportProtocol,
 )
-from a2a.utils.constants import TransportProtocol
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -133,18 +135,34 @@ def _message_parts(
 ) -> list[Part]:
     parts: list[Part] = []
     if message_text:
-        parts.append(Part(text=message_text))
+        parts.append(Part(TextPart(text=message_text)))
 
     for attachment in attachments:
-        parts.append(
-            Part(
-                raw=base64.b64decode(attachment['data']),
-                filename=attachment.get('name'),
-                media_type=attachment.get(
-                    'mimeType', 'application/octet-stream'
-                ),
+        mime_type = attachment.get('mimeType', 'application/octet-stream')
+        name = attachment.get('name')
+        uri = attachment.get('uri')
+        if uri:
+            parts.append(
+                Part(
+                    FilePart(
+                        file=FileWithUri(
+                            uri=uri, mime_type=mime_type, name=name
+                        )
+                    )
+                )
             )
-        )
+        else:
+            parts.append(
+                Part(
+                    FilePart(
+                        file=FileWithBytes(
+                            bytes=attachment['data'],
+                            mime_type=mime_type,
+                            name=name,
+                        )
+                    )
+                )
+            )
 
     return parts
 
@@ -155,15 +173,14 @@ def _build_send_message_request(
     context_id: str | None,
     metadata: dict[str, Any],
     attachments: list[dict[str, Any]],
-) -> SendMessageRequest:
-    message = Message(
-        role=Role.ROLE_USER,
+) -> Message:
+    return Message(
+        role=Role.user,
         parts=_message_parts(message_text, attachments),
         message_id=message_id,
         context_id=context_id,
         metadata=metadata,
     )
-    return SendMessageRequest(message=message, metadata=metadata)
 
 
 async def _process_a2a_response(
@@ -343,30 +360,37 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         card = await card_resolver.get_agent_card()
 
         a2a_config = ClientConfig(
-            supported_protocol_bindings=[
-                TransportProtocol.JSONRPC.value,
-                TransportProtocol.HTTP_JSON.value,
-                TransportProtocol.GRPC.value,
+            supported_transports=[
+                TransportProtocol.jsonrpc,
+                TransportProtocol.http_json,
+                TransportProtocol.grpc,
             ],
             use_client_preference=True,
             httpx_client=httpx_client,
         )
         factory = ClientFactory(a2a_config)
         a2a_client = factory.create(card)
+        server_transports = {
+            card.preferred_transport or TransportProtocol.jsonrpc.value: card.url
+        }
+        if card.additional_interfaces:
+            server_transports.update(
+                {
+                    interface.transport: interface.url
+                    for interface in card.additional_interfaces
+                }
+            )
         transport_protocol = next(
             (
-                protocol
+                protocol.value
                 for protocol in [
-                    TransportProtocol.JSONRPC.value,
-                    TransportProtocol.HTTP_JSON.value,
-                    TransportProtocol.GRPC.value,
+                    TransportProtocol.jsonrpc,
+                    TransportProtocol.http_json,
+                    TransportProtocol.grpc,
                 ]
-                if any(
-                    interface.protocol_binding == protocol
-                    for interface in card.supported_interfaces
-                )
+                if protocol.value in server_transports
             ),
-            TransportProtocol.JSONRPC.value,
+            TransportProtocol.jsonrpc.value,
         )
 
         clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
@@ -420,19 +444,19 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     _, a2a_client, _, transport = clients[sid]
 
     attachments = json_data.get('attachments', [])
-    request = _build_send_message_request(
+    message = _build_send_message_request(
         message_text, message_id, context_id, metadata, attachments
     )
 
     debug_request = {
         'transport': transport,
         'method': 'message/send',
-        'message': _to_json(request.message),
+        'message': _to_json(message),
     }
     await _emit_debug_log(sid, message_id, 'request', debug_request)
 
     try:
-        response_stream = a2a_client.send_message(request)
+        response_stream = a2a_client.send_message(message)
         async for stream_result in response_stream:
             await _process_a2a_response(stream_result, sid, message_id)
 
