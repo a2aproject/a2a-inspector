@@ -389,11 +389,10 @@ def _make_text_part(text: str) -> Any:
     """Create a text Part, compatible with v1.0 and v0.3."""
     # v1.0: Part(text=...) — protobuf oneof
     # v0.3: TextPart(text=...) wrapped in Part(root=...)
-    if Part is not None:
-        try:
-            return Part(text=text)  # v1.0
-        except (TypeError, AttributeError):
-            pass
+    try:
+        return Part(text=text)  # v1.0
+    except (TypeError, AttributeError):
+        pass
     # v0.3 fallback
     try:
         from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
@@ -410,12 +409,11 @@ def _make_file_part(data: str, mime_type: str) -> Any:
     """Create a file (bytes) Part, compatible with v1.0 and v0.3."""
     # v1.0: Part(raw=bytes, media_type=mime_type)
     # v0.3: FilePart(file=FileWithBytes(bytes=data, mime_type=mime_type))
-    if Part is not None:
-        try:
-            raw_bytes = base64.b64decode(data)
-            return Part(raw=raw_bytes, media_type=mime_type)  # v1.0
-        except (TypeError, AttributeError):
-            pass
+    try:
+        raw_bytes = base64.b64decode(data)
+        return Part(raw=raw_bytes, media_type=mime_type)  # v1.0
+    except (TypeError, AttributeError):
+        pass
     # v0.3 fallback
     try:
         from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
