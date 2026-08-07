@@ -1,6 +1,6 @@
 # A2A Protocol Inspector
 
-The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the Google A2A (Agent-to-Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
+The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the A2A (Agent2Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
 
 The application is built with a FastAPI backend and a TypeScript frontend.
 
@@ -66,9 +66,25 @@ You can run the A2A Inspector in three ways. Choose the option that best fits yo
 - Option 2 (Run with Docker): Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
 - Option 3 (Run with Docker Compose): Simplest way to run with Docker. No need to build the image manually.
 
-#### Option 1: Run Locally 
+#### Option 1: Run Locally
 
-This approach requires you to run two processes concurrently in separate terminal windows. Make sure you are in the root directory of the project (a2a-inspector) before starting.
+This approach requires you to run two processes concurrently. You can either use the provided convenience script or run them separately in different terminals.
+
+**Using the convenience script (recommended):**
+
+```sh
+# Make the script executable (first time only)
+chmod +x scripts/run.sh
+
+# Run both frontend and backend with a single command
+bash scripts/run.sh
+```
+
+This will start both the frontend build process and backend server, displaying their outputs with colored prefixes. Press `Ctrl+C` to stop both services.
+
+**Or manually in separate terminals:**
+
+Make sure you are in the root directory of the project (`a2a-inspector`) before starting.
 
 **In your first terminal**, run the frontend development server. This will build the assets and automatically rebuild them when you make changes.
 
@@ -111,8 +127,6 @@ Once the image is built, run it as a container.
 # It will run the container in detached mode (in the background)
 docker run -d -p 8080:8080 a2a-inspector
 ```
-
-##### Access the Inspector
 
 The container is now running in the background. Open your web browser and navigate to:
 **[http://127.0.0.1:8080](http://127.0.0.1:8080)**

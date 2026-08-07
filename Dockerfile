@@ -20,7 +20,7 @@ RUN npm rebuild esbuild
 RUN npm run build
 
 # Stage 2: Build the final application with the backend
-FROM python:3.10-slim
+FROM python:3.12-slim
 WORKDIR /app
 RUN pip install uv
 COPY pyproject.toml uv.lock ./

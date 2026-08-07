@@ -4,7 +4,8 @@ version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "a2a-sdk>=0.2.6",
+    "a2a-sdk[all]>=1.1.2",
+    "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "httpx-sse>=0.4.0",
     "jwcrypto>=1.5.6",
@@ -16,6 +17,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "python-socketio",
     "jinja2",
+    "bleach>=6.2.0",
 ]
 
 [tool.setuptools]
@@ -27,12 +29,30 @@ members = ["backend"]
 [dependency-groups]
 dev = [
     "mypy>=1.15.0",
+    "respx>=0.22.0",
     "ruff>=0.11.6",
     "types-requests",
     "pytest>=8.0.0",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=7.0.0",
+    "pytest-mock>=3.12.0",
+    "asgi-lifespan>=2.1.0",
+    "python-socketio[asyncio_client]",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = [
   "."
 ]
+
+[tool.pyright]
+exclude = [
+  "**/__pycache__",
+  "**/dist",
+  "**/build",
+  "**/node_modules",
+  "**/venv",
+  "**/.venv",
+]
+reportMissingImports = "none"
+reportMissingModuleSource = "none"
