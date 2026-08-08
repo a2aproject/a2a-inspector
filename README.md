@@ -60,10 +60,11 @@ cd ..
 
 ### 3. Run the Application
 
-You can run the A2A Inspector in two ways. Choose the option that best fits your workflow:
+You can run the A2A Inspector in three ways. Choose the option that best fits your workflow:
 
 - Option 1 (Run Locally): Best for developers who are actively modifying the code. This method uses two separate terminal processes and provides live-reloading for both the frontend and backend.
 - Option 2 (Run with Docker): Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
+- Option 3 (Run with Docker Compose): Simplest way to run with Docker. No need to build the image manually.
 
 #### Option 1: Run Locally
 
@@ -128,6 +129,24 @@ docker run -d -p 8080:8080 a2a-inspector
 ```
 
 The container is now running in the background. Open your web browser and navigate to:
+**[http://127.0.0.1:8080](http://127.0.0.1:8080)**
+
+#### Option 3: Run with Docker Compose
+
+The simplest way to run the inspector. Docker Compose will automatically build and run the container directly from the GitHub repository.
+
+```sh
+# If you've cloned the repository and it contains docker-compose.yml:
+docker compose up -d
+
+# Or create your own docker-compose.yml:
+curl -O https://raw.githubusercontent.com/a2aproject/a2a-inspector/main/docker-compose.yml
+docker compose up -d
+```
+
+##### Access the Inspector
+
+Open your web browser and navigate to:
 **[http://127.0.0.1:8080](http://127.0.0.1:8080)**
 
 ### 4. Inspect your agents
