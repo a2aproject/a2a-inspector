@@ -133,28 +133,3 @@ The container is now running in the background. Open your web browser and naviga
 ### 4. Inspect your agents
 
 - Try inputting a sample agent URL such as `https://sample-a2a-agent-908687846511.us-central1.run.app`
-
-## Testing
-
-### Run all tests
-
-```sh
-# Make the script executable (first time only)
-chmod +x scripts/test.sh
-
-# Run all tests
-bash scripts/test.sh
-```
-
-### Run tests separately
-
-**Backend tests:**
-```sh
-uv run pytest backend/tests/
-```
-
-**Frontend tests:**
-```sh
-cd frontend
-npm test
-```

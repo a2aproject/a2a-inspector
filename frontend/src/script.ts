@@ -2,7 +2,11 @@ import {io} from 'socket.io-client';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 
-// A2A File types (matching spec)
+// ==============================================================================
+// A2A Protocol v0.3 + v1.0 Type Definitions
+// ==============================================================================
+
+// v0.3 file types (nested under 'file' key in Part)
 interface FileBase {
   name?: string;
   mimeType?: string;
@@ -20,31 +24,92 @@ interface FileWithUri extends FileBase {
 
 type FileContent = FileWithBytes | FileWithUri;
 
+/**
+ * A2A Part — supports both v0.3 and v1.0 formats:
+ *
+ * v0.3:
+ *   - Text part:  { text: string, metadata?: ... }
+ *   - File part:  { file: { uri?: string, bytes?: string, mimeType?: string, name?: string } }
+ *   - Data part:  { data: object }
+ *
+ * v1.0 (flat protobuf Part serialized via MessageToDict):
+ *   - Text part:  { text: string }
+ *   - File (URI): { url: string, mediaType?: string, filename?: string }
+ *   - File (raw): { raw: string (base64), mediaType?: string, filename?: string }
+ *   - Data part:  { data: object }
+ */
+interface A2APart {
+  // v0.3 TextPart / v1.0 text oneof
+  text?: string;
+  // v1.0 file URI oneof
+  url?: string;
+  // v1.0 raw bytes (base64) oneof
+  raw?: string;
+  // v1.0/v0.3 data oneof
+  data?: Record<string, unknown>;
+  // Common fields
+  mediaType?: string;
+  media_type?: string;
+  mimeType?: string;
+  filename?: string;
+  metadata?: Record<string, unknown>;
+  // v0.3 FilePart nested structure
+  file?: { bytes?: string; uri?: string; mimeType?: string; name?: string };
+  // v0.3 discriminated union field
+  type?: string;
+  // Catch-all for future fields
+  [key: string]: unknown;
+}
+
+/**
+ * Task state — supports both v0.3 lowercase and v1.0 SCREAMING_SNAKE_CASE.
+ */
+type TaskState = string;
+
 interface AgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
   contextId?: string;
   error?: string;
   status?: {
-    state: string;
-    message?: {parts?: {text?: string}[]};
+    state: TaskState;
+    message?: {parts?: A2APart[]};
   };
   artifact?: {
-    parts?: ({file?: FileContent} | {text?: string} | {data?: object})[];
+    parts?: A2APart[];
   };
   artifacts?: Array<{
     artifactId?: string;
     name?: string;
     description?: string;
     metadata?: object;
-    parts?: (
-      | {kind?: string; file?: FileContent}
-      | {kind?: string; text?: string}
-      | {kind?: string; data?: object}
-    )[];
+    parts?: A2APart[];
   }>;
-  parts?: {text?: string}[];
+  parts?: A2APart[];
   validation_errors: string[];
+}
+
+// ==============================================================================
+// Task state normalization (v1.0 SCREAMING_SNAKE_CASE → display string)
+// ==============================================================================
+
+const TASK_STATE_DISPLAY: Record<string, string> = {
+  // v1.0 protobuf enum names
+  TASK_STATE_UNSPECIFIED: 'unspecified',
+  TASK_STATE_SUBMITTED: 'submitted',
+  TASK_STATE_WORKING: 'working',
+  TASK_STATE_COMPLETED: 'completed',
+  TASK_STATE_FAILED: 'failed',
+  TASK_STATE_CANCELED: 'canceled',
+  TASK_STATE_CANCELLED: 'canceled',
+  TASK_STATE_INPUT_REQUIRED: 'input-required',
+  TASK_STATE_REJECTED: 'rejected',
+  TASK_STATE_AUTH_REQUIRED: 'auth-required',
+};
+
+function normalizeTaskState(state: string | undefined): string {
+  if (!state) return 'unknown';
+  return TASK_STATE_DISPLAY[state] ?? state;
 }
 
 interface DebugLog {
@@ -774,7 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.disabled = false;
         sendBtn.disabled = false;
         chatMessages.innerHTML =
-          '<p class="placeholder-text">Send a message to start a new session.</p>';
+          '<p class="placeholder-text">💬 Send a message to start chatting with the agent.</p>';
         debugContent.innerHTML = '';
         Object.keys(rawLogStore).forEach(key => delete rawLogStore[key]);
         logIdQueue.length = 0;
@@ -881,7 +946,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const placeholder = chatMessages.querySelector('.placeholder-text');
       if (placeholder) {
-        placeholder.textContent = 'Send a message to start a new session.';
+        placeholder.textContent = '💬 Send a message to start chatting with the agent.';
       }
     }
   };
@@ -889,7 +954,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const resetSession = () => {
     contextId = null;
     chatMessages.innerHTML =
-      '<p class="placeholder-text">Send a message to start a new session.</p>';
+      '<p class="placeholder-text">💬 Send a message to start chatting with the agent.</p>';
     updateSessionUI();
   };
 
@@ -979,17 +1044,54 @@ document.addEventListener('DOMContentLoaded', () => {
     return renderMultimediaContent(dataUri, mimeType);
   };
 
+  /**
+   * Render an A2A Part to HTML.
+   *
+   * Handles both v0.3 and v1.0 Part formats:
+   *
+   * v0.3 Part formats:
+   *   { text: string }
+   *   { file: { bytes?: string, uri?: string, mimeType?: string, name?: string } }
+   *   { data: object }
+   *
+   * v1.0 Part formats (flat, from protobuf MessageToDict):
+   *   { text: string }
+   *   { url: string, mediaType?: string, filename?: string }   ← file with URI
+   *   { raw: string (base64), mediaType?: string, filename?: string }  ← file with bytes
+   *   { data: object }
+   */
   const processPart = (p: any): string | null => {
+    // --- Text (both v0.3 and v1.0) ---
     if (p.text) {
       return DOMPurify.sanitize(marked.parse(p.text) as string);
-    } else if (p.file) {
+    }
+
+    // --- v0.3 File part: { file: { bytes?, uri?, mimeType?, name? } } ---
+    if (p.file) {
       const {uri, bytes, mimeType} = p.file;
       if (bytes && mimeType) {
         return renderBase64Data(bytes, mimeType);
       } else if (uri && mimeType) {
         return renderMultimediaContent(uri, mimeType);
+      } else if (uri) {
+        return renderMultimediaContent(uri, 'application/octet-stream');
       }
-    } else if (p.data) {
+    }
+
+    // --- v1.0 File part (URI): { url: string, mediaType?: string } ---
+    if (p.url) {
+      const mimeType = p.mediaType || 'application/octet-stream';
+      return renderMultimediaContent(p.url, mimeType);
+    }
+
+    // --- v1.0 File part (raw bytes): { raw: string (base64), mediaType?: string } ---
+    if (p.raw) {
+      const mimeType = p.mediaType || 'application/octet-stream';
+      return renderBase64Data(p.raw, mimeType);
+    }
+
+    // --- Data part (both versions) ---
+    if (p.data) {
       const dataObj = p.data as any;
       if (dataObj.mimeType && typeof dataObj.data === 'string') {
         return renderBase64Data(dataObj.data, dataObj.mimeType);
@@ -997,6 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
       }
     }
+
     return null;
   };
 
@@ -1057,7 +1160,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } else if (event.status) {
           // Only show task status if there are no artifacts
-          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(event.status.state)}`;
+          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(normalizeTaskState(event.status.state))}`;
           appendMessage(
             'agent progress',
             statusHtml,
@@ -1069,20 +1172,25 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       }
       case 'status-update': {
-        const statusText = event.status?.message?.parts?.[0]?.text;
-        if (statusText) {
-          const renderedContent = DOMPurify.sanitize(
-            marked.parse(statusText) as string,
-          );
-          const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> Server responded with: ${renderedContent}`;
-          appendMessage(
-            'agent progress',
-            messageHtml,
-            displayMessageId,
-            true,
-            validationErrors,
-          );
-        }
+        // Show the status state and any embedded message parts
+        const statusState = normalizeTaskState(event.status?.state);
+        const statusMsgParts = event.status?.message?.parts || [];
+        const statusParts: string[] = [];
+        statusMsgParts.forEach(p => {
+          const content = processPart(p);
+          if (content) statusParts.push(content);
+        });
+        const statusBody = statusParts.length > 0
+          ? statusParts.join('')
+          : `State: ${DOMPurify.sanitize(statusState)}`;
+        const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> ${statusBody}`;
+        appendMessage(
+          'agent progress',
+          messageHtml,
+          displayMessageId,
+          true,
+          validationErrors,
+        );
         break;
       }
       case 'artifact-update':
@@ -1102,12 +1210,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         break;
       case 'message': {
-        const textPart = event.parts?.find(p => p.text);
-        if (textPart && textPart.text) {
-          const renderedContent = DOMPurify.sanitize(
-            marked.parse(textPart.text) as string,
-          );
-          const messageHtml = `<span class="kind-chip kind-chip-message">${event.kind}</span> ${renderedContent}`;
+        // Render all parts in the message (supports v0.3 and v1.0 Part formats)
+        const messageParts = event.parts || [];
+        const allContent: string[] = [];
+        messageParts.forEach(p => {
+          const content = processPart(p);
+          if (content) allContent.push(content);
+        });
+        if (allContent.length > 0) {
+          const combinedContent = allContent.join('');
+          const messageHtml = `<span class="kind-chip kind-chip-message">${event.kind}</span> ${combinedContent}`;
           appendMessage(
             'agent',
             messageHtml,
@@ -1213,8 +1325,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const statusIndicator = document.createElement('span');
     statusIndicator.className = 'validation-status';
+    const isError = sender.includes('error');
     if (sender !== 'user') {
-      if (validationErrors.length > 0) {
+      if (isError) {
+        statusIndicator.classList.add('error');
+        statusIndicator.textContent = '❌';
+        statusIndicator.title = 'Agent returned an error';
+      } else if (validationErrors.length > 0) {
         statusIndicator.classList.add('invalid');
         statusIndicator.textContent = '⚠️';
         statusIndicator.title = validationErrors.join('\n');

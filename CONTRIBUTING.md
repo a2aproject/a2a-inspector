@@ -26,3 +26,21 @@ Here are some additional things to keep in mind during the process:
 
 - **Test your changes.** Before you submit a pull request, make sure that your changes work as expected.
 - **Be patient.** It may take some time for your pull request to be reviewed and merged.
+
+## Testing
+
+Run all tests:
+
+```sh
+bash scripts/test.sh
+```
+
+Or run backend and frontend tests separately:
+
+```sh
+# Backend
+uv run pytest backend/tests/
+
+# Frontend
+cd frontend && npm test
+```
