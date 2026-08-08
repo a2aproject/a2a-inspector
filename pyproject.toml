@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "python-socketio",
     "jinja2",
-    "bleach>=6.2.0",
+    "bleach>=6.4.0",
 ]
 
 [tool.setuptools]
