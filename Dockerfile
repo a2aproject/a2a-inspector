@@ -34,4 +34,4 @@ EXPOSE 8080
 
 # The command to run the server. Because our WORKDIR is now /app/backend,
 # we can simply refer to 'app:app' from the current directory.git 
-CMD ["uv", "run", "--", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uv", "run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
