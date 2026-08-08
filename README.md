@@ -102,7 +102,7 @@ npm run build -- --watch
 cd backend
 
 # Run the FastAPI server with live reload
-uv run app.py
+uv run -- uvicorn app:app --host 127.0.0.1 --port 5001 --reload
 ```
 
 ##### Access the Inspector
