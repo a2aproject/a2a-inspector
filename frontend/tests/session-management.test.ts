@@ -88,7 +88,10 @@ describe('Session Management', () => {
     });
   });
 
-  function setupToggle(toggleElement: HTMLElement, contentElement: HTMLElement) {
+  function setupToggle(
+    toggleElement: HTMLElement,
+    contentElement: HTMLElement,
+  ) {
     const icon = toggleElement.querySelector('.toggle-icon') as HTMLElement;
 
     toggleElement.addEventListener('click', () => {

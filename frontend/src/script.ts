@@ -398,11 +398,96 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   authTypeSelect.addEventListener('change', () => {
-    renderAuthInputs(authTypeSelect.value);
+    const authType = authTypeSelect.value;
+    localStorage.setItem('authType', authType);
+    renderAuthInputs(authType);
+    loadAuthInputValues(authType);
   });
 
-  // Initialize with default auth type
+  // Function to save auth input values
+  function saveAuthInputValues() {
+    const authType = authTypeSelect.value;
+    const authData: Record<string, string> = {};
+
+    switch (authType) {
+      case 'bearer':
+        authData.token = getInputValue('bearer-token');
+        break;
+      case 'api-key':
+        authData.header = getInputValue('api-key-header');
+        authData.value = getInputValue('api-key-value');
+        break;
+      case 'basic':
+        authData.username = getInputValue('basic-username');
+        authData.password = getInputValue('basic-password');
+        break;
+    }
+
+    localStorage.setItem(`auth_${authType}`, JSON.stringify(authData));
+  }
+
+  // Function to load auth input values
+  function loadAuthInputValues(authType: string) {
+    const savedData = localStorage.getItem(`auth_${authType}`);
+    if (!savedData) return;
+
+    try {
+      const authData = JSON.parse(savedData);
+
+      // Wait for inputs to be rendered
+      setTimeout(() => {
+        switch (authType) {
+          case 'bearer': {
+            const tokenInput = document.getElementById(
+              'bearer-token',
+            ) as HTMLInputElement;
+            if (tokenInput && authData.token) tokenInput.value = authData.token;
+            break;
+          }
+          case 'api-key': {
+            const headerInput = document.getElementById(
+              'api-key-header',
+            ) as HTMLInputElement;
+            const valueInput = document.getElementById(
+              'api-key-value',
+            ) as HTMLInputElement;
+            if (headerInput && authData.header)
+              headerInput.value = authData.header;
+            if (valueInput && authData.value) valueInput.value = authData.value;
+            break;
+          }
+          case 'basic': {
+            const usernameInput = document.getElementById(
+              'basic-username',
+            ) as HTMLInputElement;
+            const passwordInput = document.getElementById(
+              'basic-password',
+            ) as HTMLInputElement;
+            if (usernameInput && authData.username)
+              usernameInput.value = authData.username;
+            if (passwordInput && authData.password)
+              passwordInput.value = authData.password;
+            break;
+          }
+        }
+      }, 0);
+    } catch (e) {
+      console.error('Failed to load auth data:', e);
+    }
+  }
+
+  // Save auth inputs when they change
+  authInputsContainer.addEventListener('input', () => {
+    saveAuthInputValues();
+  });
+
+  // Load saved auth type or initialize with default
+  const savedAuthType = localStorage.getItem('authType');
+  if (savedAuthType) {
+    authTypeSelect.value = savedAuthType;
+  }
   renderAuthInputs(authTypeSelect.value);
+  loadAuthInputValues(authTypeSelect.value);
 
   const sessionDetailsToggle = document.getElementById(
     'session-details-toggle',
@@ -741,12 +826,73 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Load agent URL from localStorage
+  const savedAgentUrl = localStorage.getItem('agentCardUrl');
+  if (savedAgentUrl) {
+    agentCardUrlInput.value = savedAgentUrl;
+  }
+
+  // Load headers from localStorage
+  const savedHeaders = localStorage.getItem('customHeaders');
+  if (savedHeaders) {
+    try {
+      const headers = JSON.parse(savedHeaders);
+      Object.entries(headers).forEach(([name, value]) => {
+        addHeaderField(name, value as string);
+      });
+    } catch (e) {
+      console.error('Failed to load saved headers:', e);
+    }
+  }
+
+  // Save agent URL to localStorage when it changes
+  agentCardUrlInput.addEventListener('blur', () => {
+    const url = agentCardUrlInput.value.trim();
+    if (url) {
+      localStorage.setItem('agentCardUrl', url);
+    }
+  });
+
+  // Function to save headers to localStorage
+  function saveHeadersToLocalStorage() {
+    const headers = getKeyValuePairs(
+      headersList,
+      '.header-item',
+      '.header-name',
+      '.header-value',
+    );
+    localStorage.setItem('customHeaders', JSON.stringify(headers));
+  }
+
+  // Save headers when they change (delegate event on parent)
+  headersList.addEventListener('input', () => {
+    saveHeadersToLocalStorage();
+  });
+
+  // Save headers when a header is removed
+  headersList.addEventListener('click', event => {
+    const removeBtn = (event.target as HTMLElement).closest(
+      '.remove-header-btn',
+    );
+    if (removeBtn) {
+      // Wait for the DOM to update
+      setTimeout(saveHeadersToLocalStorage, 0);
+    }
+  });
+
   connectBtn.addEventListener('click', async () => {
     let agentCardUrl = agentCardUrlInput.value.trim();
     if (!agentCardUrl) {
       alert('Please enter an agent card URL.');
       return;
     }
+
+    // Save agent URL to localStorage
+    localStorage.setItem('agentCardUrl', agentCardUrl);
+    // Save auth to localStorage
+    saveAuthInputValues();
+    // Save headers to localStorage
+    saveHeadersToLocalStorage();
 
     // If no protocol is specified, prepend http://
     if (!/^[a-zA-Z]+:\/\//.test(agentCardUrl)) {

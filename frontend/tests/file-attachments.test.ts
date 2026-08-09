@@ -21,7 +21,9 @@ describe('File Attachments', () => {
 
     fileInput = document.getElementById('file-input') as HTMLInputElement;
     attachBtn = document.getElementById('attach-btn') as HTMLButtonElement;
-    attachmentsPreview = document.getElementById('attachments-preview') as HTMLElement;
+    attachmentsPreview = document.getElementById(
+      'attachments-preview',
+    ) as HTMLElement;
   });
 
   it('starts with file input hidden', () => {
@@ -102,7 +104,12 @@ describe('File Attachments', () => {
 
   it('renders multiple attachments', () => {
     const attachments = [
-      {name: 'file1.pdf', size: 1024, mimeType: 'application/pdf', data: 'data1'},
+      {
+        name: 'file1.pdf',
+        size: 1024,
+        mimeType: 'application/pdf',
+        data: 'data1',
+      },
       {name: 'file2.png', size: 2048, mimeType: 'image/png', data: 'data2'},
       {name: 'file3.txt', size: 512, mimeType: 'text/plain', data: 'data3'},
     ];
@@ -152,7 +159,12 @@ describe('File Attachments', () => {
 
   it('removes specific attachment from list', () => {
     const attachments = [
-      {name: 'file1.pdf', size: 1024, mimeType: 'application/pdf', data: 'data1'},
+      {
+        name: 'file1.pdf',
+        size: 1024,
+        mimeType: 'application/pdf',
+        data: 'data1',
+      },
       {name: 'file2.png', size: 2048, mimeType: 'image/png', data: 'data2'},
       {name: 'file3.txt', size: 512, mimeType: 'text/plain', data: 'data3'},
     ];
@@ -166,10 +178,10 @@ describe('File Attachments', () => {
     ) as HTMLButtonElement;
     fireEvent.click(removeBtn);
 
-    const remainingChips = attachmentsPreview.querySelectorAll('.attachment-chip');
+    const remainingChips =
+      attachmentsPreview.querySelectorAll('.attachment-chip');
     expect(remainingChips.length).toBe(2);
   });
-
 
   it('renders thumbnails for images', () => {
     const attachment = {
