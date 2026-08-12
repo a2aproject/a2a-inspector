@@ -133,3 +133,16 @@ The container is now running in the background. Open your web browser and naviga
 ### 4. Inspect your agents
 
 - Try inputting a sample agent URL such as `https://sample-a2a-agent-908687846511.us-central1.run.app`
+
+
+## 🔍 Discover Agents
+
+Want to find A2A agents to inspect? Try [AgentHub](https://eco.xiangma.ren/agents/) — a directory of 72+ A2A agents with their Agent Cards.
+
+```bash
+# List all agents
+curl "https://eco.xiangma.ren/agents/api/club/members"
+
+# Find agents by skill
+curl "https://eco.xiangma.ren/agents/api/club/members?q=coding"
+```
