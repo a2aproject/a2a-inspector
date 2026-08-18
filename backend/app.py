@@ -1,6 +1,8 @@
 import base64
 import logging
 
+from importlib import import_module
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -8,8 +10,18 @@ from uuid import uuid4
 import bleach
 import httpx
 import socketio
-import validators
 
+from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
+from a2a.types import (
+    AgentCard,
+    FilePart,
+    FileWithBytes,
+    FileWithUri,
+    Message,
+    Part,
+    Role,
+    TextPart,
+    TransportProtocol,
 from a2a.client import A2ACardResolver
 from a2a.client.client import Client, ClientConfig
 from a2a.client.client_factory import ClientFactory
@@ -27,6 +39,10 @@ from fastapi.templating import Jinja2Templates
 from google.protobuf.json_format import MessageToDict
 
 
+try:
+    validators = import_module('backend.validators')
+except ModuleNotFoundError:
+    validators = import_module('validators')
 # ---------------------------------------------------------------------------
 # Backward-compatibility: TransportProtocol moved and enum values changed.
 # v0.3: TransportProtocol.jsonrpc  (lowercase)
@@ -74,6 +90,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
+FRONTEND_PUBLIC_DIR = (
+    Path(__file__).resolve().parent.parent / 'frontend' / 'public'
+)
 
 app = FastAPI()
 # NOTE: In a production environment, cors_allowed_origins should be restricted
@@ -82,8 +101,8 @@ sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 socket_app = socketio.ASGIApp(sio)
 app.mount('/socket.io', socket_app)
 
-app.mount('/static', StaticFiles(directory='../frontend/public'), name='static')
-templates = Jinja2Templates(directory='../frontend/public')
+app.mount('/static', StaticFiles(directory=FRONTEND_PUBLIC_DIR), name='static')
+templates = Jinja2Templates(directory=FRONTEND_PUBLIC_DIR)
 
 # ==============================================================================
 # State Management
@@ -180,6 +199,113 @@ async def _emit_debug_log(
     )
 
 
+def _normalize_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        normalized = {key: _normalize_json(val) for key, val in value.items()}
+        role = normalized.get('role')
+        if isinstance(role, str) and role.startswith('ROLE_'):
+            normalized['role'] = role.removeprefix('ROLE_').lower()
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_json(item) for item in value]
+    return value
+
+
+def _to_json(value: Any) -> dict[str, Any]:
+    if hasattr(value, 'model_dump'):
+        data = value.model_dump(exclude_none=True)
+    else:
+        data = MessageToDict(
+            value,
+            preserving_proto_field_name=False,
+            use_integers_for_enums=False,
+        )
+    return _normalize_json(data)
+
+
+def _unwrap_stream_event(client_event: Any) -> tuple[Any, str | None]:
+    event = client_event[1] if isinstance(client_event, tuple) else client_event
+    if isinstance(client_event, tuple) and event is None:
+        event = client_event[0]
+
+    payload_name = None
+    if hasattr(event, 'WhichOneof'):
+        payload_name = event.WhichOneof('payload')
+        if payload_name:
+            event = getattr(event, payload_name)
+
+    return event, payload_name
+
+
+def _message_parts(
+    message_text: str, attachments: list[dict[str, Any]]
+) -> list[Part]:
+    parts: list[Part] = []
+    if message_text:
+        parts.append(Part(TextPart(text=message_text)))
+
+    for attachment in attachments:
+        mime_type = attachment.get('mimeType', 'application/octet-stream')
+        name = attachment.get('name')
+        uri = attachment.get('uri')
+        if uri:
+            parts.append(
+                Part(
+                    FilePart(
+                        file=FileWithUri(
+                            uri=uri, mime_type=mime_type, name=name
+                        )
+                    )
+                )
+            )
+        else:
+            parts.append(
+                Part(
+                    FilePart(
+                        file=FileWithBytes(
+                            bytes=attachment['data'],
+                            mime_type=mime_type,
+                            name=name,
+                        )
+                    )
+                )
+            )
+
+    return parts
+
+
+def _build_send_message_request(
+    message_text: str,
+    message_id: str,
+    context_id: str | None,
+    metadata: dict[str, Any],
+    attachments: list[dict[str, Any]],
+) -> Message:
+    return Message(
+        role=Role.user,
+        parts=_message_parts(message_text, attachments),
+        message_id=message_id,
+        context_id=context_id,
+        metadata=metadata,
+    )
+
+
+async def _process_a2a_response(
+    client_event: Any, sid: str, request_id: str
+) -> None:
+    """Processes a response from the A2A client and emits inspector events."""
+    event, payload_name = _unwrap_stream_event(client_event)
+    response_data = _to_json(event)
+
+    if payload_name:
+        response_data['kind'] = payload_name.replace('_', '-')
+
+    response_id = (
+        response_data.get('id')
+        or response_data.get('messageId')
+        or response_data.get('taskId')
+        or request_id
+    )
 def _extract_context_id_from_event(event: Any) -> str | None:
     """Extract context_id from any of the possible event types."""
     for attr in ('context_id', 'contextId'):
@@ -463,7 +589,9 @@ async def _send_message_compat(
 @app.get('/', response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """Serve the main index.html page."""
-    return templates.TemplateResponse('index.html', {'request': request})
+    return templates.TemplateResponse(
+        request, 'index.html', {'request': request}
+    )
 
 
 @app.post('/agent-card')
@@ -513,6 +641,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
             card_resolver = get_card_resolver(client, agent_url)
             card = await card_resolver.get_agent_card()
 
+        card_data = _to_json(card)
         card_data = _get_agent_card_dict(card)
         validation_errors = validators.validate_agent_card(card_data)
         response_data = {
@@ -584,6 +713,49 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
 
+        a2a_config = ClientConfig(
+            supported_transports=[
+                TransportProtocol.jsonrpc,
+                TransportProtocol.http_json,
+                TransportProtocol.grpc,
+            ],
+            use_client_preference=True,
+            httpx_client=httpx_client,
+        )
+        factory = ClientFactory(a2a_config)
+        a2a_client = factory.create(card)
+        server_transports = {
+            card.preferred_transport
+            or TransportProtocol.jsonrpc.value: card.url
+        }
+        if card.additional_interfaces:
+            server_transports.update(
+                {
+                    interface.transport: interface.url
+                    for interface in card.additional_interfaces
+                }
+            )
+        transport_protocol = next(
+            (
+                protocol.value
+                for protocol in [
+                    TransportProtocol.jsonrpc,
+                    TransportProtocol.http_json,
+                    TransportProtocol.grpc,
+                ]
+                if protocol.value in server_transports
+            ),
+            TransportProtocol.jsonrpc.value,
+        )
+
+        clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
+
+        input_modes = list(getattr(card, 'default_input_modes', [])) or [
+            'text/plain'
+        ]
+        output_modes = list(getattr(card, 'default_output_modes', [])) or [
+            'text/plain'
+        ]
         a2a_config = _make_client_config()
         a2a_config.httpx_client = httpx_client  # type: ignore[attr-defined]
 
@@ -600,7 +772,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             'client_initialized',
             {
                 'status': 'success',
-                'transport': str(transport_protocol),
+                'transport': transport_protocol,
                 'inputModes': input_modes,
                 'outputModes': output_modes,
             },
@@ -638,6 +810,8 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     _, a2a_client, _, transport = clients[sid]
 
     attachments = json_data.get('attachments', [])
+    message = _build_send_message_request(
+        message_text, message_id, context_id, metadata, attachments
 
     parts: list[Any] = []
     if message_text:
@@ -658,6 +832,8 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
 
     debug_request = {
         'transport': transport,
+        'method': 'message/send',
+        'message': _to_json(message),
         'method': 'SendMessage',  # v1.0 PascalCase (was 'message/send' in v0.3)
         'message': _to_dict(message),
     }
