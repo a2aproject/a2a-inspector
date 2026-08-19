@@ -119,6 +119,25 @@ interface DebugLog {
   id: string;
 }
 
+export function escapeHtml(text: string): string {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export function formatJsonForHtml(jsonData: unknown): string {
+  const json = JSON.stringify(jsonData, null, 2) ?? 'undefined';
+  const escaped = escapeHtml(json);
+  return escaped.replace(
+    /&quot;method&quot;: &quot;(.*?)&quot;/g,
+    (_match, method: string) =>
+      `<span class="json-highlight">&quot;method&quot;: &quot;${method}&quot;</span>`,
+  );
+}
+
 // Declare hljs global from CDN
 declare global {
   interface Window {
@@ -129,6 +148,10 @@ declare global {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (!document.getElementById('connect-btn')) {
+    return;
+  }
+
   const socket = io();
 
   const INITIALIZATION_TIMEOUT_MS = 10000;
@@ -731,12 +754,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const showJsonInModal = (jsonData: any) => {
     if (jsonData) {
-      let jsonString = JSON.stringify(jsonData, null, 2);
-      jsonString = jsonString.replace(
-        /"method": "([^"]+)"/g,
-        '<span class="json-highlight">"method": "$1"</span>',
-      );
-      modalJsonContent.innerHTML = jsonString;
+      modalJsonContent.innerHTML = formatJsonForHtml(jsonData);
       jsonModal.classList.remove('hidden');
     }
   };
@@ -812,14 +830,14 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (data.validation_errors.length > 0) {
-        validationErrorsContainer.innerHTML = `<h3>Validation Errors</h3><ul>${data.validation_errors.map((e: string) => `<li>${e}</li>`).join('')}</ul>`;
+        validationErrorsContainer.innerHTML = `<h3>Validation Errors</h3><ul>${data.validation_errors.map((e: string) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`;
       } else {
         validationErrorsContainer.innerHTML =
           '<p class="success-text">Agent card is valid.</p>';
       }
     } catch (error) {
       clearTimeout(initializationTimeout);
-      validationErrorsContainer.innerHTML = `<p class="error-text">Error: ${(error as Error).message}</p>`;
+      validationErrorsContainer.innerHTML = `<p class="error-text">Error: ${escapeHtml((error as Error).message)}</p>`;
       chatInput.disabled = true;
       sendBtn.disabled = true;
     }
@@ -871,7 +889,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Enable attach button
         attachBtn.disabled = false;
       } else {
-        validationErrorsContainer.innerHTML = `<p class="error-text">Error initializing client: ${data.message}</p>`;
+        validationErrorsContainer.innerHTML = `<p class="error-text">Error initializing client: ${escapeHtml(data.message ?? '')}</p>`;
         isConnected = false;
         updateSessionUI();
       }
@@ -1253,19 +1271,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const logEntry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString();
 
-    let jsonString = JSON.stringify(log.data, null, 2);
-    jsonString = jsonString.replace(
-      /"method": "([^"]+)"/g,
-      '<span class="json-highlight">"method": "$1"</span>',
-    );
-
     logEntry.className = `log-entry log-${log.type}`;
     logEntry.innerHTML = `
             <div>
-                <span class="log-timestamp">${timestamp}</span>
-                <strong>${log.type.toUpperCase()}</strong>
+                <span class="log-timestamp">${escapeHtml(timestamp)}</span>
+                <strong>${escapeHtml(log.type.toUpperCase())}</strong>
             </div>
-            <pre>${jsonString}</pre>
+            <pre>${formatJsonForHtml(log.data)}</pre>
         `;
     debugContent.appendChild(logEntry);
 
