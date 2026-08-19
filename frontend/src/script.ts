@@ -1,6 +1,6 @@
 import {io} from 'socket.io-client';
-import {marked} from 'marked';
 import DOMPurify from 'dompurify';
+import {processPart, renderStatusUpdateEvent, renderTaskEvent} from './render';
 
 // ==============================================================================
 // A2A Protocol v0.3 + v1.0 Type Definitions
@@ -87,29 +87,6 @@ interface AgentResponseEvent {
   }>;
   parts?: A2APart[];
   validation_errors: string[];
-}
-
-// ==============================================================================
-// Task state normalization (v1.0 SCREAMING_SNAKE_CASE → display string)
-// ==============================================================================
-
-const TASK_STATE_DISPLAY: Record<string, string> = {
-  // v1.0 protobuf enum names
-  TASK_STATE_UNSPECIFIED: 'unspecified',
-  TASK_STATE_SUBMITTED: 'submitted',
-  TASK_STATE_WORKING: 'working',
-  TASK_STATE_COMPLETED: 'completed',
-  TASK_STATE_FAILED: 'failed',
-  TASK_STATE_CANCELED: 'canceled',
-  TASK_STATE_CANCELLED: 'canceled',
-  TASK_STATE_INPUT_REQUIRED: 'input-required',
-  TASK_STATE_REJECTED: 'rejected',
-  TASK_STATE_AUTH_REQUIRED: 'auth-required',
-};
-
-function normalizeTaskState(state: string | undefined): string {
-  if (!state) return 'unknown';
-  return TASK_STATE_DISPLAY[state] ?? state;
 }
 
 interface DebugLog {
@@ -1020,89 +997,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
 
-  const renderMultimediaContent = (uri: string, mimeType: string): string => {
-    const sanitizedUri = DOMPurify.sanitize(uri);
-    const sanitizedMimeType = DOMPurify.sanitize(mimeType);
-
-    if (mimeType.startsWith('image/')) {
-      return `<div class="media-container"><img src="${sanitizedUri}" alt="Image attachment" class="media-image" /></div>`;
-    } else if (mimeType.startsWith('audio/')) {
-      return `<div class="media-container"><audio controls class="media-audio"><source src="${sanitizedUri}" type="${sanitizedMimeType}">Your browser does not support audio playback.</audio></div>`;
-    } else if (mimeType.startsWith('video/')) {
-      return `<div class="media-container"><video controls class="media-video"><source src="${sanitizedUri}" type="${sanitizedMimeType}">Your browser does not support video playback.</video></div>`;
-    } else if (mimeType === 'application/pdf') {
-      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">📄 View PDF</a></div>`;
-    } else {
-      // For other file types, show a download link
-      const icon = getModalityIcon(mimeType);
-      return `<div class="media-container"><a href="${sanitizedUri}" target="_blank" rel="noopener noreferrer" class="file-link">${icon} Download file (${sanitizedMimeType})</a></div>`;
-    }
-  };
-
-  const renderBase64Data = (base64Data: string, mimeType: string): string => {
-    const dataUri = `data:${mimeType};base64,${base64Data}`;
-    return renderMultimediaContent(dataUri, mimeType);
-  };
-
-  /**
-   * Render an A2A Part to HTML.
-   *
-   * Handles both v0.3 and v1.0 Part formats:
-   *
-   * v0.3 Part formats:
-   *   { text: string }
-   *   { file: { bytes?: string, uri?: string, mimeType?: string, name?: string } }
-   *   { data: object }
-   *
-   * v1.0 Part formats (flat, from protobuf MessageToDict):
-   *   { text: string }
-   *   { url: string, mediaType?: string, filename?: string }   ← file with URI
-   *   { raw: string (base64), mediaType?: string, filename?: string }  ← file with bytes
-   *   { data: object }
-   */
-  const processPart = (p: any): string | null => {
-    // --- Text (both v0.3 and v1.0) ---
-    if (p.text) {
-      return DOMPurify.sanitize(marked.parse(p.text) as string);
-    }
-
-    // --- v0.3 File part: { file: { bytes?, uri?, mimeType?, name? } } ---
-    if (p.file) {
-      const {uri, bytes, mimeType} = p.file;
-      if (bytes && mimeType) {
-        return renderBase64Data(bytes, mimeType);
-      } else if (uri && mimeType) {
-        return renderMultimediaContent(uri, mimeType);
-      } else if (uri) {
-        return renderMultimediaContent(uri, 'application/octet-stream');
-      }
-    }
-
-    // --- v1.0 File part (URI): { url: string, mediaType?: string } ---
-    if (p.url) {
-      const mimeType = p.mediaType || 'application/octet-stream';
-      return renderMultimediaContent(p.url, mimeType);
-    }
-
-    // --- v1.0 File part (raw bytes): { raw: string (base64), mediaType?: string } ---
-    if (p.raw) {
-      const mimeType = p.mediaType || 'application/octet-stream';
-      return renderBase64Data(p.raw, mimeType);
-    }
-
-    // --- Data part (both versions) ---
-    if (p.data) {
-      const dataObj = p.data as any;
-      if (dataObj.mimeType && typeof dataObj.data === 'string') {
-        return renderBase64Data(dataObj.data, dataObj.mimeType);
-      } else {
-        return `<pre><code>${DOMPurify.sanitize(JSON.stringify(p.data, null, 2))}</code></pre>`;
-      }
-    }
-
-    return null;
-  };
-
   socket.on('agent_response', (event: AgentResponseEvent) => {
     // Hide loading indicator on first response
     hideLoadingIndicator();
@@ -1131,39 +1025,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     switch (event.kind) {
       case 'task': {
-        // For HTTP+JSON tasks with artifacts, display content with kind chip (like JSON-RPC messages)
-        const hasArtifacts = event.artifacts && event.artifacts.length > 0;
-
-        if (hasArtifacts && event.artifacts) {
-          // Collect all artifact content
-          const allContent: string[] = [];
-
-          event.artifacts.forEach(artifact => {
-            artifact.parts?.forEach(p => {
-              const content = processPart(p);
-              if (content) allContent.push(content);
-            });
-          });
-
-          // Display with kind chip for consistency with JSON-RPC messages
-          if (allContent.length > 0) {
-            const combinedContent = allContent.join('');
-            const kindChip = `<span class="kind-chip kind-chip-${event.kind}">${event.kind}</span>`;
-            const messageHtml = `${kindChip} ${combinedContent}`;
-            appendMessage(
-              'agent',
-              messageHtml,
-              displayMessageId,
-              true,
-              validationErrors,
-            );
-          }
-        } else if (event.status) {
-          // Only show task status if there are no artifacts
-          const statusHtml = `<span class="kind-chip kind-chip-task">${event.kind}</span> Task created with status: ${DOMPurify.sanitize(normalizeTaskState(event.status.state))}`;
+        const rendered = renderTaskEvent(event);
+        if (rendered) {
           appendMessage(
-            'agent progress',
-            statusHtml,
+            rendered.sender,
+            rendered.html,
             displayMessageId,
             true,
             validationErrors,
@@ -1172,21 +1038,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       }
       case 'status-update': {
-        // Show the status state and any embedded message parts
-        const statusState = normalizeTaskState(event.status?.state);
-        const statusMsgParts = event.status?.message?.parts || [];
-        const statusParts: string[] = [];
-        statusMsgParts.forEach(p => {
-          const content = processPart(p);
-          if (content) statusParts.push(content);
-        });
-        const statusBody = statusParts.length > 0
-          ? statusParts.join('')
-          : `State: ${DOMPurify.sanitize(statusState)}`;
-        const messageHtml = `<span class="kind-chip kind-chip-status-update">${event.kind}</span> ${statusBody}`;
+        const rendered = renderStatusUpdateEvent(event);
         appendMessage(
-          'agent progress',
-          messageHtml,
+          rendered.sender,
+          rendered.html,
           displayMessageId,
           true,
           validationErrors,
