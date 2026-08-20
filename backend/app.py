@@ -1,4 +1,5 @@
 import base64
+import inspect
 import logging
 
 from typing import Any
@@ -547,6 +548,26 @@ async def get_agent_card(request: Request) -> JSONResponse:
 # ==============================================================================
 
 
+async def _release_client(sid: str) -> None:
+    """Close and drop any stored client for sid, ignoring close errors."""
+    existing = clients.pop(sid, None)
+    if existing is None:
+        return
+    httpx_client, a2a_client, _, _ = existing
+    closer = getattr(a2a_client, 'close', None)
+    if callable(closer):
+        try:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.debug(f'Error closing A2A client for {sid}', exc_info=True)
+    try:
+        await httpx_client.aclose()
+    except Exception:
+        logger.debug(f'Error closing httpx client for {sid}', exc_info=True)
+
+
 @sio.on('connect')
 async def handle_connect(sid: str, environ: dict[str, Any]) -> None:
     """Handle the 'connect' socket.io event."""
@@ -558,8 +579,7 @@ async def handle_disconnect(sid: str) -> None:
     """Handle the 'disconnect' socket.io event."""
     logger.info(f'Client disconnected: {sid}')
     if sid in clients:
-        httpx_client, _, _, _ = clients.pop(sid)
-        await httpx_client.aclose()
+        await _release_client(sid)
         logger.info(f'Cleaned up client for {sid}')
 
 
@@ -591,6 +611,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         a2a_client = factory.create(card)
         transport_protocol = _get_transport_from_card(card)
 
+        await _release_client(sid)
         clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
 
         input_modes = _get_input_modes(card)
