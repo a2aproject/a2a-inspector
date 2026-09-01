@@ -12,9 +12,9 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
       - name: Install uv
@@ -45,7 +45,7 @@ jobs:
       - name: Run Pyright (Pylance equivalent)
         id: pyright
         continue-on-error: true
-        uses: jakebailey/pyright-action@v2
+        uses: jakebailey/pyright-action@v3
         with:
           pylance-version: latest-release
 
