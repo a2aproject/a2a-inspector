@@ -20,7 +20,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.13",
     "marked": "^16.0.0",
     "socket.io-client": "^4.8.1"
   },
