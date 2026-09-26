@@ -19,6 +19,8 @@ jobs:
           python-version-file: .python-version
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.5"
       - name: Add uv to PATH
         run: |
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
