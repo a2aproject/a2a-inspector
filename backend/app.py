@@ -11,6 +11,7 @@ import socketio
 import validators
 
 from a2a.client import A2ACardResolver
+from a2a.client.card_resolver import parse_agent_card
 from a2a.client.client import Client, ClientConfig
 from a2a.client.client_factory import ClientFactory
 from a2a.types import (
@@ -317,6 +318,28 @@ def _normalize_task_state(data: dict[str, Any]) -> None:
             data['status']['state'] = int_map.get(state, str(state))
 
 
+def build_synthetic_agent_card(agent_url: str) -> AgentCard:
+    """Build a placeholder AgentCard for agents with no Agent Card endpoint.
+
+    Some A2A servers implement the JSON-RPC message protocol but don't expose
+    a discoverable agent card. In that case we skip card resolution entirely
+    and point a minimal synthetic card straight at the given URL so the rest
+    of the client plumbing (which expects a card) still works.
+    """
+    return parse_agent_card(
+        {
+            'name': 'Direct A2A Endpoint (no Agent Card)',
+            'version': '1.0.0',
+            'url': agent_url,
+            'preferredTransport': 'JSONRPC',
+            'capabilities': {},
+            'defaultInputModes': ['text/plain'],
+            'defaultOutputModes': ['text/plain'],
+            'skills': [],
+        }
+    )
+
+
 def get_card_resolver(
     client: httpx.AsyncClient, agent_card_url: str
 ) -> A2ACardResolver:
@@ -474,6 +497,7 @@ async def get_agent_card(request: Request) -> JSONResponse:
         request_data = await request.json()
         agent_url = request_data.get('url')
         sid = request_data.get('sid')
+        no_agent_card = bool(request_data.get('noAgentCard'))
 
         if not agent_url or not sid:
             return JSONResponse(
@@ -507,14 +531,20 @@ async def get_agent_card(request: Request) -> JSONResponse:
 
     # 3. Perform the main action and prepare response.
     try:
-        async with httpx.AsyncClient(
-            timeout=30.0, headers=custom_headers
-        ) as client:
-            card_resolver = get_card_resolver(client, agent_url)
-            card = await card_resolver.get_agent_card()
+        if no_agent_card:
+            card = build_synthetic_agent_card(agent_url)
+            validation_errors: list[str] = []
+        else:
+            async with httpx.AsyncClient(
+                timeout=30.0, headers=custom_headers, verify=False
+            ) as client:
+                card_resolver = get_card_resolver(client, agent_url)
+                card = await card_resolver.get_agent_card()
+            validation_errors = validators.validate_agent_card(
+                _get_agent_card_dict(card)
+            )
 
         card_data = _get_agent_card_dict(card)
-        validation_errors = validators.validate_agent_card(card_data)
         response_data = {
             'card': card_data,
             'validation_errors': validation_errors,
@@ -567,6 +597,7 @@ async def handle_disconnect(sid: str) -> None:
 async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
     """Handle the 'initialize_client' socket.io event."""
     agent_card_url = data.get('url')
+    no_agent_card = bool(data.get('noAgentCard'))
 
     custom_headers = data.get('customHeaders', {})
 
@@ -580,9 +611,14 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
 
     httpx_client = None
     try:
-        httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
-        card_resolver = get_card_resolver(httpx_client, agent_card_url)
-        card = await card_resolver.get_agent_card()
+        httpx_client = httpx.AsyncClient(
+            timeout=600.0, headers=custom_headers, verify=False
+        )
+        if no_agent_card:
+            card = build_synthetic_agent_card(agent_card_url)
+        else:
+            card_resolver = get_card_resolver(httpx_client, agent_card_url)
+            card = await card_resolver.get_agent_card()
 
         a2a_config = _make_client_config()
         a2a_config.httpx_client = httpx_client  # type: ignore[attr-defined]

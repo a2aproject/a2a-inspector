@@ -166,6 +166,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const agentCardUrlInput = document.getElementById(
     'agent-card-url',
   ) as HTMLInputElement;
+  const noAgentCardCheckbox = document.getElementById(
+    'no-agent-card-checkbox',
+  ) as HTMLInputElement;
   const httpHeadersToggle = document.getElementById(
     'http-headers-toggle',
   ) as HTMLElement;
@@ -777,12 +780,17 @@ document.addEventListener('DOMContentLoaded', () => {
       'Content-Type': 'application/json',
       ...customHeaders,
     };
+    const noAgentCard = noAgentCardCheckbox.checked;
 
     try {
       const response = await fetch('/agent-card', {
         method: 'POST',
         headers: requestHeaders,
-        body: JSON.stringify({url: agentCardUrl, sid: socket.id}),
+        body: JSON.stringify({
+          url: agentCardUrl,
+          sid: socket.id,
+          noAgentCard,
+        }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -809,6 +817,7 @@ document.addEventListener('DOMContentLoaded', () => {
       socket.emit('initialize_client', {
         url: agentCardUrl,
         customHeaders: customHeaders,
+        noAgentCard,
       });
 
       if (data.validation_errors.length > 0) {
