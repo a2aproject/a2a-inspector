@@ -69,13 +69,15 @@ type TaskState = string;
 interface AgentResponseEvent {
   kind: 'task' | 'status-update' | 'artifact-update' | 'message';
   id: string;
+  taskId?: string;
   contextId?: string;
   error?: string;
   status?: {
     state: TaskState;
-    message?: {parts?: A2APart[]};
+    message?: {messageId?: string; parts?: A2APart[]};
   };
   artifact?: {
+    artifactId?: string;
     parts?: A2APart[];
   };
   artifacts?: Array<{
@@ -206,6 +208,12 @@ document.addEventListener('DOMContentLoaded', () => {
   ) as HTMLElement;
   const chatInput = document.getElementById('chat-input') as HTMLInputElement;
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+  const sendStreamingBtn = document.getElementById(
+    'send-streaming-btn',
+  ) as HTMLButtonElement;
+  const resumeTaskBtn = document.getElementById(
+    'resume-task-btn',
+  ) as HTMLButtonElement;
   const chatMessages = document.getElementById('chat-messages') as HTMLElement;
   const debugConsole = document.getElementById('debug-console') as HTMLElement;
   const debugHandle = document.getElementById('debug-handle') as HTMLElement;
@@ -233,7 +241,11 @@ document.addEventListener('DOMContentLoaded', () => {
   ) as HTMLElement;
 
   let contextId: string | null = null;
+  let activeTaskId: string | null = null;
+  let followNextTask = false;
+  const eventCursors = new Map<string, string>();
   let isConnected = false;
+  let streamingSupported = false;
   let supportedInputModes: string[] = ['text/plain'];
   let supportedOutputModes: string[] = ['text/plain'];
   let isResizing = false;
@@ -771,6 +783,7 @@ document.addEventListener('DOMContentLoaded', () => {
       '<div class="loader"></div><p class="placeholder-text">Fetching Agent Card...</p>';
     chatInput.disabled = true;
     sendBtn.disabled = true;
+    sendStreamingBtn.disabled = true;
 
     const customHeaders = getCustomHeaders();
     const requestHeaders = {
@@ -833,11 +846,16 @@ document.addEventListener('DOMContentLoaded', () => {
       transport?: string;
       inputModes?: string[];
       outputModes?: string[];
+      streaming?: boolean;
     }) => {
       clearTimeout(initializationTimeout);
       if (data.status === 'success') {
         chatInput.disabled = false;
         sendBtn.disabled = false;
+        streamingSupported = data.streaming === true;
+        sendStreamingBtn.hidden = !streamingSupported;
+        sendStreamingBtn.disabled = !streamingSupported;
+        resumeTaskBtn.hidden = !streamingSupported;
         chatMessages.innerHTML =
           '<p class="placeholder-text">💬 Send a message to start chatting with the agent.</p>';
         debugContent.innerHTML = '';
@@ -870,9 +888,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Enable attach button
         attachBtn.disabled = false;
+        updateStreamingControls();
       } else {
         validationErrorsContainer.innerHTML = `<p class="error-text">Error initializing client: ${data.message}</p>`;
         isConnected = false;
+        streamingSupported = false;
+        sendStreamingBtn.hidden = true;
+        resumeTaskBtn.hidden = true;
         updateSessionUI();
       }
     },
@@ -951,11 +973,63 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const seenEvents = new Set<string>();
+
+  const eventKey = (event: AgentResponseEvent): string | null => {
+    const taskId = event.taskId;
+    const sequence = event.artifact?.artifactId || event.status?.message?.messageId;
+    return taskId && sequence ? `${taskId}:${sequence}:${event.kind}` : null;
+  };
+
+  const rememberEventCursor = (event: AgentResponseEvent) => {
+    const taskId = event.taskId;
+    if (!taskId) return;
+    const candidates = [
+      event.status?.message?.messageId,
+      event.artifact?.artifactId,
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || !/^\d+$/.test(candidate)) continue;
+      const current = eventCursors.get(taskId) ?? null;
+      if (current === null || BigInt(candidate) > BigInt(current)) {
+        eventCursors.set(taskId, candidate);
+      }
+    }
+  };
+
+  const adoptAddressedTask = (event: AgentResponseEvent) => {
+    const taskId = event.taskId;
+    if (!taskId) return;
+    if (!activeTaskId) {
+      activeTaskId = taskId;
+      return;
+    }
+    if (followNextTask && taskId !== activeTaskId) {
+      activeTaskId = taskId;
+      followNextTask = false;
+    }
+  };
+
+  const updateStreamingControls = () => {
+    sendStreamingBtn.disabled = !isConnected || !streamingSupported;
+    resumeTaskBtn.disabled = !isConnected || !streamingSupported;
+
+    const taskDetails = document.getElementById('task-details');
+    if (taskDetails) {
+      taskDetails.textContent = activeTaskId ?? 'No active task';
+    }
+  };
+
   const resetSession = () => {
     contextId = null;
+    activeTaskId = null;
+    followNextTask = false;
+    eventCursors.clear();
+    seenEvents.clear();
     chatMessages.innerHTML =
       '<p class="placeholder-text">💬 Send a message to start chatting with the agent.</p>';
     updateSessionUI();
+    updateStreamingControls();
   };
 
   const showLoadingIndicator = () => {
@@ -977,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  const sendMessage = () => {
+  const sendMessage = (streaming = false) => {
     const messageText = chatInput.value;
     if ((messageText.trim() || attachments.length > 0) && !chatInput.disabled) {
       const sanitizedMessage = DOMPurify.sanitize(messageText);
@@ -1001,10 +1075,14 @@ document.addEventListener('DOMContentLoaded', () => {
         mimeType: a.mimeType,
       }));
 
-      socket.emit('send_message', {
+      if (activeTaskId) followNextTask = true;
+      const lastEventId = activeTaskId ? eventCursors.get(activeTaskId) ?? null : null;
+      socket.emit(streaming ? 'send_streaming_message' : 'send_message', {
         message: sanitizedMessage,
         id: messageId,
         contextId,
+        taskId: activeTaskId,
+        lastEventId,
         metadata,
         attachments: attachmentsToSend,
       });
@@ -1015,9 +1093,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  sendBtn.addEventListener('click', sendMessage);
+  sendBtn.addEventListener('click', () => sendMessage());
+  sendStreamingBtn.addEventListener('click', () => sendMessage(true));
+  resumeTaskBtn.addEventListener('click', () => {
+    const taskId = activeTaskId || window.prompt('Task ID to resume');
+    if (!taskId) return;
+    activeTaskId = taskId;
+    updateStreamingControls();
+    showLoadingIndicator();
+    socket.emit('subscribe_to_task', {
+      taskId,
+      lastEventId: eventCursors.get(taskId) ?? null,
+    });
+  });
   chatInput.addEventListener('keypress', (e: KeyboardEvent) => {
-    if (e.key === 'Enter') sendMessage();
+    if (e.key === 'Enter') sendMessage(streamingSupported);
   });
 
   const renderMultimediaContent = (uri: string, mimeType: string): string => {
@@ -1124,10 +1214,16 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (event.contextId) {
+    adoptAddressedTask(event);
+    if (!contextId && event.contextId) {
       contextId = event.contextId;
       updateSessionUI();
     }
+    const rendered = eventKey(event);
+    if (rendered && seenEvents.has(rendered)) return;
+    if (rendered) seenEvents.add(rendered);
+    rememberEventCursor(event);
+    updateStreamingControls();
 
     switch (event.kind) {
       case 'task': {

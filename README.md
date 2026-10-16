@@ -10,6 +10,7 @@ The application is built with a FastAPI backend and a TypeScript frontend.
 - **View Agent Card:** Automatically fetches and displays the agent's card.
 - **Spec Compliance Checks:** Performs basic validation on the agent card to ensure it adheres to the A2A specification.
 - **Live Chat:** A chat interface to send and receive messages with the connected agent.
+- **Standard A2A streaming:** If the Agent Card advertises `capabilities.streaming`, **Send streaming** and Enter send `SendStreamingMessage`. **Send** still sends `SendMessage`. The inspector renders status and artifact updates, and a quiet stream is not closed by a read timeout. **Resume task stream** sends `SubscribeToTask`, including `Last-Event-ID` when a numeric event id was seen.
 - **Debug Console:** A slide-out console shows the raw JSON-RPC 2.0 messages sent and received between the inspector and the agent server.
 
 ## Prerequisites
@@ -22,7 +23,7 @@ The application is built with a FastAPI backend and a TypeScript frontend.
 
 This repository is organized into two main parts:
 
-- `./backend/`: Contains the Python FastAPI server that handles WebSocket connections and communication with the A2A agent.
+- `./backend/`: Contains the Python FastAPI server that manages the Socket.IO browser session and communicates with the A2A agent through the A2A SDK.
 - `./frontend/`: Contains the TypeScript and CSS source files for the web interface.
 
 ## Setup and Running the Application
