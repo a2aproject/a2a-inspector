@@ -71,7 +71,10 @@
         <div id="chat-container">
             <div class="chat-header-container">
                 <h2 class="chat-header">Chat</h2>
-                <button id="new-session-btn" class="new-session-btn" disabled>New Session</button>
+                <div class="chat-actions">
+                    <button id="resume-task-btn" class="new-session-btn" hidden disabled>Resume task stream</button>
+                    <button id="new-session-btn" class="new-session-btn" disabled>New Session</button>
+                </div>
             </div>
             <p class="chat-info">
                 Messages from the agent are marked with ✅ (compliant) or ⚠️ (non-compliant). Click any message to view the raw JSON.
@@ -102,6 +105,10 @@
                             <strong>Context ID:</strong>
                             <code id="session-details" class="session-context-id">No active session</code>
                         </div>
+                        <div class="session-info-row">
+                            <strong>Task ID:</strong>
+                            <code id="task-details" class="session-context-id">No active task</code>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -128,6 +135,7 @@
                         <span class="attach-icon">📎</span>
                     </button>
                     <button id="send-btn" disabled>Send</button>
+                    <button id="send-streaming-btn" hidden disabled>Send streaming</button>
                 </div>
             </div>
         </div>

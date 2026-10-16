@@ -1,6 +1,9 @@
+import asyncio
 import base64
 import logging
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -8,10 +11,15 @@ from uuid import uuid4
 import bleach
 import httpx
 import socketio
-import validators
+
+
+try:
+    from backend import validators
+except ModuleNotFoundError:
+    import validators  # type: ignore[no-redef]
 
 from a2a.client import A2ACardResolver
-from a2a.client.client import Client, ClientConfig
+from a2a.client.client import Client, ClientCallContext, ClientConfig
 from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
@@ -19,6 +27,7 @@ from a2a.types import (
     Part,
     Role,
     SendMessageRequest,
+    SubscribeToTaskRequest,
 )
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -82,17 +91,38 @@ sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 socket_app = socketio.ASGIApp(sio)
 app.mount('/socket.io', socket_app)
 
-app.mount('/static', StaticFiles(directory='../frontend/public'), name='static')
-templates = Jinja2Templates(directory='../frontend/public')
+static_dir = Path(__file__).resolve().parent.parent / 'frontend' / 'public'
+app.mount('/static', StaticFiles(directory=static_dir), name='static')
+templates = Jinja2Templates(directory=static_dir)
 
 # ==============================================================================
 # State Management
 # ==============================================================================
 
+
 # NOTE: This global dictionary stores state. For a simple inspector tool with
 # transient connections, this is acceptable. For a scalable production service,
 # a more robust state management solution (e.g., Redis) would be required.
-clients: dict[str, tuple[httpx.AsyncClient, Client, AgentCard, str]] = {}
+def _streaming_timeout() -> httpx.Timeout:
+    """A streaming response can stay idle. Do not time out a quiet read."""
+    return httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+
+
+@dataclass
+class ClientSession:
+    """The standard A2A clients and HTTP connection for one browser session."""
+
+    httpx_client: httpx.AsyncClient
+    message_client: Client
+    streaming_client: Client
+    agent_card: AgentCard
+    transport: str
+    streaming_httpx_client: httpx.AsyncClient | None = None
+
+
+clients: dict[str, ClientSession] = {}
+streams: dict[tuple[str, str], asyncio.Task[None]] = {}
+stream_readers: set[asyncio.Task[None]] = set()
 
 
 # ==============================================================================
@@ -189,6 +219,19 @@ def _extract_context_id_from_event(event: Any) -> str | None:
     return None
 
 
+def _extract_task_id_from_event(event: Any) -> str | None:
+    """Extract the task ID from a task or task update event."""
+    for attr in ('task_id', 'taskId'):
+        value = getattr(event, attr, None)
+        if value:
+            return str(value)
+    if type(event).__name__ == 'Task':
+        value = getattr(event, 'id', None)
+        if value:
+            return str(value)
+    return None
+
+
 def _unwrap_stream_response(client_event: Any) -> object:
     """Unwrap a StreamResponse or legacy ClientEvent into the inner payload.
 
@@ -254,6 +297,9 @@ async def _process_a2a_response(
     # Serialize
     response_data = _to_dict(event)
     response_data['id'] = response_id
+    task_id = _extract_task_id_from_event(event)
+    if task_id:
+        response_data['taskId'] = task_id
 
     # Normalize kind for frontend (protobuf doesn't have 'kind')
     if 'kind' not in response_data:
@@ -337,7 +383,7 @@ def get_card_resolver(
     return card_resolver
 
 
-def _make_client_config() -> ClientConfig:
+def _make_client_config(*, streaming: bool) -> ClientConfig:
     """Build ClientConfig, handling v1.0 and v0.3 API differences.
 
     v1.0: supported_protocol_bindings param (SCREAMING_SNAKE_CASE enum values)
@@ -352,10 +398,11 @@ def _make_client_config() -> ClientConfig:
                 _TP_GRPC,
             ],
             use_client_preference=True,
+            streaming=streaming,
         )
     except TypeError:
         # v0.3 fallback
-        return ClientConfig(
+        config = ClientConfig(
             supported_transports=[  # type: ignore[call-arg]
                 _TP_JSONRPC,
                 _TP_HTTP_JSON,
@@ -363,14 +410,17 @@ def _make_client_config() -> ClientConfig:
             ],
             use_client_preference=True,
         )
+        config.streaming = streaming
+        return config
 
 
-def _make_message(
+def _make_message(  # noqa: PLR0913
     role: Any,
     parts: list[Any],
     message_id: str,
     context_id: str | None,
     metadata: dict[str, Any],
+    task_id: str | None = None,
 ) -> Message:
     """Build a Message, compatible with both v1.0 (protobuf) and v0.3 (Pydantic)."""
     kwargs: dict[str, Any] = {
@@ -380,6 +430,8 @@ def _make_message(
     }
     if context_id:
         kwargs['context_id'] = context_id
+    if task_id:
+        kwargs['task_id'] = task_id
     if metadata:
         kwargs['metadata'] = metadata  # type: ignore[assignment]
     return Message(**kwargs)
@@ -439,20 +491,103 @@ def _get_role_user() -> Any:
 async def _send_message_compat(
     client: Client,
     message: Message,
+    last_event_id: str | None = None,
 ) -> Any:
     """Call client.send_message with v1.0 or v0.3 API.
 
     v1.0: client.send_message(SendMessageRequest(request=message)) -> AsyncIterator[ClientEvent]
     v0.3: client.send_message(message) -> AsyncIterator[ClientEvent]
     """
+    context = None
+    if last_event_id and last_event_id.isdigit():
+        context = ClientCallContext(
+            service_parameters={'Last-Event-ID': last_event_id}
+        )
     # v1.0: send_message() requires a SendMessageRequest protobuf wrapper.
     # The wrapper field is "message" (not "request" — that was pre-alpha naming).
     try:
         request = SendMessageRequest(message=message)
-        return client.send_message(request)
+        if context is None:
+            return client.send_message(request)
+        return client.send_message(request, context=context)
     except (TypeError, AttributeError, ValueError):
         # v0.3 fallback: send_message takes a Message directly
         return client.send_message(message)  # type: ignore[arg-type]
+
+
+async def _subscribe_to_task_compat(
+    client: Client,
+    task_id: str,
+    last_event_id: str | None = None,
+) -> Any:
+    """Subscribe through the SDK's standard SubscribeToTask operation."""
+    context = None
+    if last_event_id and last_event_id.isdigit():
+        context = ClientCallContext(
+            service_parameters={'Last-Event-ID': last_event_id}
+        )
+    return client.subscribe(SubscribeToTaskRequest(id=task_id), context=context)
+
+
+def _start_stream(
+    sid: str, assumed_task: str, response_stream: Any, message_id: str
+) -> None:
+    """Read one SSE stream. A later stream for the same task replaces it."""
+
+    async def read() -> None:
+        owner: tuple[str, str] | None = None
+        try:
+            async for stream_result in response_stream:
+                extracted = _extract_task_id_from_event(
+                    _unwrap_stream_response(stream_result)
+                )
+                event_task = extracted or assumed_task
+                key = (sid, event_task)
+                if owner is None:
+                    owner = key
+                    current = asyncio.current_task()
+                    previous = streams.get(key)
+                    if (
+                        extracted
+                        and extracted == assumed_task
+                        and previous is not None
+                        and previous is not current
+                        and not previous.done()
+                    ):
+                        previous.cancel()
+                    if current is not None:
+                        streams[key] = current
+                await _process_a2a_response(stream_result, sid, message_id)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.error(
+                'Failed to read stream for %s', assumed_task, exc_info=True
+            )
+            await sio.emit(
+                'agent_response',
+                {'error': f'Failed to stream message: {e}', 'id': message_id},
+                to=sid,
+            )
+        finally:
+            if (
+                owner is not None
+                and streams.get(owner) is asyncio.current_task()
+            ):
+                streams.pop(owner, None)
+            current = asyncio.current_task()
+            if current is not None:
+                stream_readers.discard(current)
+
+    task = asyncio.create_task(read())
+    stream_readers.add(task)
+
+
+def _supports_streaming(card: AgentCard) -> bool:
+    """Return whether the Agent Card advertises the standard streaming capability."""
+    return bool(
+        getattr(getattr(card, 'capabilities', None), 'streaming', False)
+    )
 
 
 # ==============================================================================
@@ -557,9 +692,17 @@ async def handle_connect(sid: str, environ: dict[str, Any]) -> None:
 async def handle_disconnect(sid: str) -> None:
     """Handle the 'disconnect' socket.io event."""
     logger.info(f'Client disconnected: {sid}')
+    for key in list(streams):
+        if key[0] != sid:
+            continue
+        current = streams.pop(key, None)
+        if current is not None and not current.done():
+            current.cancel()
     if sid in clients:
-        httpx_client, _, _, _ = clients.pop(sid)
-        await httpx_client.aclose()
+        session = clients.pop(sid)
+        await session.httpx_client.aclose()
+        if session.streaming_httpx_client is not None:
+            await session.streaming_httpx_client.aclose()
         logger.info(f'Cleaned up client for {sid}')
 
 
@@ -579,19 +722,32 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         return
 
     httpx_client = None
+    streaming_httpx_client = None
     try:
         httpx_client = httpx.AsyncClient(timeout=600.0, headers=custom_headers)
+        streaming_httpx_client = httpx.AsyncClient(
+            timeout=_streaming_timeout(), headers=custom_headers
+        )
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
 
-        a2a_config = _make_client_config()
-        a2a_config.httpx_client = httpx_client  # type: ignore[attr-defined]
+        message_config = _make_client_config(streaming=False)
+        message_config.httpx_client = httpx_client  # type: ignore[attr-defined]
+        streaming_config = _make_client_config(streaming=True)
+        streaming_config.httpx_client = streaming_httpx_client  # type: ignore[attr-defined]
 
-        factory = ClientFactory(a2a_config)
-        a2a_client = factory.create(card)
+        message_client = ClientFactory(message_config).create(card)
+        streaming_client = ClientFactory(streaming_config).create(card)
         transport_protocol = _get_transport_from_card(card)
 
-        clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
+        clients[sid] = ClientSession(
+            httpx_client=httpx_client,
+            message_client=message_client,
+            streaming_client=streaming_client,
+            agent_card=card,
+            transport=transport_protocol,
+            streaming_httpx_client=streaming_httpx_client,
+        )
 
         input_modes = _get_input_modes(card)
         output_modes = _get_output_modes(card)
@@ -603,6 +759,7 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
                 'transport': str(transport_protocol),
                 'inputModes': input_modes,
                 'outputModes': output_modes,
+                'streaming': _supports_streaming(card),
             },
             to=sid,
         )
@@ -611,6 +768,8 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
             f'Failed to initialize client for {sid}: {e}', exc_info=True
         )
         # Clean up httpx_client
+        if streaming_httpx_client is not None:
+            await streaming_httpx_client.aclose()
         if httpx_client is not None:
             await httpx_client.aclose()
         await sio.emit(
@@ -635,7 +794,7 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         )
         return
 
-    _, a2a_client, _, transport = clients[sid]
+    session = clients[sid]
 
     attachments = json_data.get('attachments', [])
 
@@ -654,17 +813,20 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         message_id=message_id,
         context_id=context_id,
         metadata=metadata,
+        task_id=json_data.get('taskId') or None,
     )
 
     debug_request = {
-        'transport': transport,
+        'transport': session.transport,
         'method': 'SendMessage',  # v1.0 PascalCase (was 'message/send' in v0.3)
         'message': _to_dict(message),
     }
     await _emit_debug_log(sid, message_id, 'request', debug_request)
 
     try:
-        response_stream = await _send_message_compat(a2a_client, message)
+        response_stream = await _send_message_compat(
+            session.message_client, message
+        )
         async for stream_result in response_stream:
             await _process_a2a_response(stream_result, sid, message_id)
 
@@ -673,6 +835,147 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         await sio.emit(
             'agent_response',
             {'error': f'Failed to send message: {e}', 'id': message_id},
+            to=sid,
+        )
+
+
+@sio.on('send_streaming_message')
+async def handle_send_streaming_message(
+    sid: str, json_data: dict[str, Any]
+) -> None:
+    """Send through the SDK, which selects standard SendStreamingMessage/SSE."""
+    message_id = json_data.get('id', str(uuid4()))
+    if sid not in clients:
+        await sio.emit(
+            'agent_response',
+            {'error': 'Client not initialized.', 'id': message_id},
+            to=sid,
+        )
+        return
+
+    session = clients[sid]
+    if not _supports_streaming(session.agent_card):
+        await sio.emit(
+            'agent_response',
+            {
+                'error': 'The Agent Card does not advertise streaming.',
+                'id': message_id,
+            },
+            to=sid,
+        )
+        return
+
+    message_text = bleach.clean(json_data.get('message', ''))
+    parts: list[Any] = []
+    if message_text:
+        parts.append(_make_text_part(str(message_text)))
+    for attachment in json_data.get('attachments', []):
+        parts.append(
+            _make_file_part(attachment['data'], attachment['mimeType'])
+        )
+
+    continued = json_data.get('taskId') or None
+    message = _make_message(
+        role=_get_role_user(),
+        parts=parts,
+        message_id=message_id,
+        context_id=json_data.get('contextId'),
+        metadata=json_data.get('metadata', {}),
+        task_id=continued,
+    )
+    await _emit_debug_log(
+        sid,
+        message_id,
+        'request',
+        {
+            'transport': session.transport,
+            'method': 'SendStreamingMessage',
+            'message': _to_dict(message),
+        },
+    )
+
+    last_event_id = json_data.get('lastEventId')
+    if not isinstance(last_event_id, str) or not last_event_id.isdigit():
+        last_event_id = None
+    try:
+        response_stream = await _send_message_compat(
+            session.streaming_client, message, last_event_id
+        )
+    except Exception as e:
+        logger.error(
+            f'Failed to send streaming message for sid {sid}', exc_info=True
+        )
+        await sio.emit(
+            'agent_response',
+            {'error': f'Failed to stream message: {e}', 'id': message_id},
+            to=sid,
+        )
+        return
+
+    task_key = (
+        continued if isinstance(continued, str) and continued else message_id
+    )
+    _start_stream(sid, task_key, response_stream, message_id)
+
+
+@sio.on('subscribe_to_task')
+async def handle_subscribe_to_task(sid: str, json_data: dict[str, Any]) -> None:
+    """Resume a known task through the SDK's standard SubscribeToTask call."""
+    task_id = json_data.get('taskId')
+    last_event_id = json_data.get('lastEventId')
+    if not isinstance(last_event_id, str) or not last_event_id.isdigit():
+        last_event_id = None
+    if not isinstance(task_id, str) or not task_id:
+        await sio.emit(
+            'agent_response',
+            {
+                'error': 'A task ID is required to subscribe.',
+                'id': str(uuid4()),
+            },
+            to=sid,
+        )
+        return
+    if sid not in clients:
+        await sio.emit(
+            'agent_response',
+            {'error': 'Client not initialized.', 'id': task_id},
+            to=sid,
+        )
+        return
+
+    session = clients[sid]
+    if not _supports_streaming(session.agent_card):
+        await sio.emit(
+            'agent_response',
+            {
+                'error': 'The Agent Card does not advertise streaming.',
+                'id': task_id,
+            },
+            to=sid,
+        )
+        return
+
+    await _emit_debug_log(
+        sid,
+        task_id,
+        'request',
+        {
+            'transport': session.transport,
+            'method': 'SubscribeToTask',
+            'id': task_id,
+        },
+    )
+    try:
+        response_stream = await _subscribe_to_task_compat(
+            session.streaming_client, task_id, last_event_id
+        )
+        _start_stream(sid, task_id, response_stream, task_id)
+        return
+    except Exception as e:
+        logger.error(f'Failed to subscribe to task {task_id}', exc_info=True)
+        await sio.emit(
+            'agent_response',
+            {'error': f'Failed to subscribe to task: {e}', 'id': task_id},
             to=sid,
         )
 

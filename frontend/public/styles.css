@@ -1057,6 +1057,11 @@ body.dark-mode .loading-spinner {
     margin-bottom: 8px;
 }
 
+.chat-actions {
+    display: flex;
+    gap: 8px;
+}
+
 .chat-header {
     display: flex;
     align-items: center;
