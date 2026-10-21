@@ -66,7 +66,7 @@ func validateCard(t *testing.T, raw string, in CardInput) []Finding {
 	t.Helper()
 	var card map[string]any
 	if err := json.Unmarshal([]byte(raw), &card); err == nil {
-		in.Info = agents.DescribeCard(card)
+		in.Info = agents.DescribeCard(card, (&agents.Dialer{}).Supports)
 	}
 	return Card([]byte(raw), in).Findings
 }

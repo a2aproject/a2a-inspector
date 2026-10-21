@@ -65,6 +65,15 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Check that the generated types are up to date
+        run: |
+          npm run gen:types
+          if [ -n "$(git status --porcelain -- src/a2a)" ]; then
+            echo "ui/src/a2a doesn't match the schemas. Run 'npm run gen:types' in ui/ and commit the result."
+            git status --porcelain -- src/a2a
+            exit 1
+          fi
+
       - name: Build
         run: npm run build
 

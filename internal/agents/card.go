@@ -111,12 +111,16 @@ type CardResponse struct {
 	Latency  time.Duration
 }
 
-// FetchCard requests cardURL and returns the response whatever its status.
-// It only returns an error when no response was received.
-func FetchCard(ctx context.Context, client *http.Client, cardURL string) (*CardResponse, error) {
+// FetchCard requests cardURL with the given extra headers and returns the
+// response whatever its status. It only returns an error when no response
+// was received.
+func FetchCard(ctx context.Context, client *http.Client, cardURL string, headers http.Header) (*CardResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cardURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	for k, vals := range headers {
+		req.Header[k] = vals
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "a2a-inspector")
@@ -182,8 +186,10 @@ type CardInfo struct {
 	DefaultInterface int
 }
 
-// DescribeCard detects the format of a decoded agent card and lists its interfaces.
-func DescribeCard(card map[string]any) CardInfo {
+// DescribeCard detects the format of a decoded agent card and lists its
+// interfaces. supports tells which ones the inspector can talk to, as
+// Dialer.Supports does.
+func DescribeCard(card map[string]any, supports func(binding, version string) bool) CardInfo {
 	_, hasV10 := card["supportedInterfaces"]
 	hasV03 := has(card, "url") || has(card, "preferredTransport") || has(card, "additionalInterfaces") ||
 		strings.HasPrefix(str(card["protocolVersion"]), "0.")
@@ -206,9 +212,10 @@ func DescribeCard(card map[string]any) CardInfo {
 		info.Versions = []string{Version10}
 	}
 	for i := range info.Interfaces {
-		if info.Interfaces[i].Supported {
+		iface := &info.Interfaces[i]
+		iface.Supported = supports(iface.ProtocolBinding, iface.ProtocolVersion)
+		if iface.Supported && info.DefaultInterface < 0 {
 			info.DefaultInterface = i
-			break
 		}
 	}
 	return info
@@ -275,8 +282,6 @@ func newInterface(rawURL, binding, version, tenant, source string) Interface {
 	if core := CoreBinding(binding); core != "" {
 		iface.ProtocolBinding = core
 	}
-	iface.Supported = CoreBinding(binding) != "" &&
-		(iface.ProtocolVersion == Version10 || iface.ProtocolVersion == Version03)
 	return iface
 }
 

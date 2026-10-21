@@ -8,6 +8,7 @@
     "**/node_modules/**",
     "**/ui/dist/**",
     "**/internal/validate/schemas/**",
+    "**/ui/src/a2a/*.gen.ts",
     "**/*_test.go",
     "**/*.test.ts",
     "**/*.test.tsx"

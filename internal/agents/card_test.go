@@ -172,7 +172,7 @@ func TestDescribeCard(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DescribeCard(decode(t, []byte(tc.card)))
+			got := DescribeCard(decode(t, []byte(tc.card)), (&Dialer{}).Supports)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("DescribeCard() mismatch (-want +got):\n%s", diff)
 			}
@@ -199,14 +199,14 @@ func TestFetchCard(t *testing.T) {
 		_, _ = w.Write([]byte(strings.Repeat(" ", MaxCardSize+10)))
 	})
 	mux.HandleFunc("/headers", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"accept": r.Header.Get("Accept"), "userAgent": r.Header.Get("User-Agent")})
+		_ = json.NewEncoder(w).Encode(map[string]string{"accept": r.Header.Get("Accept"), "userAgent": r.Header.Get("User-Agent"), "token": r.Header.Get("X-Token")})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	ctx := context.Background()
 
 	t.Run("card", func(t *testing.T) {
-		resp, err := FetchCard(ctx, srv.Client(), srv.URL+WellKnownCardPath)
+		resp, err := FetchCard(ctx, srv.Client(), srv.URL+WellKnownCardPath, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -218,7 +218,7 @@ func TestFetchCard(t *testing.T) {
 		}
 	})
 	t.Run("redirect reports the final URL", func(t *testing.T) {
-		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/old")
+		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/old", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,7 +227,7 @@ func TestFetchCard(t *testing.T) {
 		}
 	})
 	t.Run("error status is returned, not an error", func(t *testing.T) {
-		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/missing")
+		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/missing", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -236,7 +236,7 @@ func TestFetchCard(t *testing.T) {
 		}
 	})
 	t.Run("body is capped", func(t *testing.T) {
-		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/huge")
+		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/huge", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,17 +245,17 @@ func TestFetchCard(t *testing.T) {
 		}
 	})
 	t.Run("request headers", func(t *testing.T) {
-		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/headers")
+		resp, err := FetchCard(ctx, srv.Client(), srv.URL+"/headers", http.Header{"X-Token": {"t0ken"}, "Accept": {"text/html"}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := decode(t, resp.Body)
-		if got["accept"] != "application/json" || got["userAgent"] != "a2a-inspector" {
+		if got["accept"] != "application/json" || got["userAgent"] != "a2a-inspector" || got["token"] != "t0ken" {
 			t.Errorf("request headers = %v", got)
 		}
 	})
 	t.Run("connection error", func(t *testing.T) {
-		if _, err := FetchCard(ctx, srv.Client(), "http://127.0.0.1:1/card.json"); err == nil {
+		if _, err := FetchCard(ctx, srv.Client(), "http://127.0.0.1:1/card.json", nil); err == nil {
 			t.Error("FetchCard() error = nil, want a connection error")
 		}
 	})

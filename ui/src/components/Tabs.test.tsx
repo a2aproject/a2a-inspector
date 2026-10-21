@@ -42,4 +42,19 @@ describe('Tabs', () => {
 
     expect(screen.getByRole('tab', { name: 'Beta' })).toHaveAttribute('tabindex', '-1');
   });
+
+  it('follows a controlled active tab and marks panels that fill', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    const { rerender } = render(
+      <Tabs label="Example" tabs={[{ ...tabs[0]!, fill: true }, tabs[1]!]} active="a" onChange={(id) => changes.push(id)} />,
+    );
+    expect(screen.getByRole('tabpanel')).toHaveClass('tab-panel-fill');
+
+    await user.click(screen.getByRole('tab', { name: 'Beta' }));
+    expect(changes).toEqual(['b']);
+    rerender(<Tabs label="Example" tabs={[{ ...tabs[0]!, fill: true }, tabs[1]!]} active="b" onChange={(id) => changes.push(id)} />);
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Beta content');
+    expect(screen.getByRole('tabpanel')).not.toHaveClass('tab-panel-fill');
+  });
 });

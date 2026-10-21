@@ -226,7 +226,10 @@ button:disabled {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
 }
 
-input[type='text'] {
+input[type='text'],
+input[type='password'],
+select,
+textarea {
   font: inherit;
   font-size: 13.5px;
   color: inherit;
@@ -238,11 +241,23 @@ input[type='text'] {
   flex: 1;
 }
 
-input[type='text']:hover {
+input[type='text']:hover,
+input[type='password']:hover,
+select:hover,
+textarea:hover {
   border-color: var(--border-strong);
 }
+textarea {
+  width: 100%;
+  resize: vertical;
+}
+textarea.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
 
-input[type='radio'] {
+input[type='radio'],
+input[type='checkbox'] {
   accent-color: var(--accent);
 }
 
@@ -432,10 +447,62 @@ input[type='radio'] {
   grid-template-columns: var(--layout-columns, minmax(0, 1fr));
 }
 
+/* Positioned, so absolutely positioned content such as visually hidden labels scrolls with the
+   panel instead of stretching the page. */
 .panel {
+  position: relative;
   padding: 16px;
   min-width: 0;
   overflow: auto;
+}
+
+/* The details panel doesn't scroll as a whole: the tab row stays put and each tab panel scrolls.
+   A row of tabs is 41px tall (13.5px text at line-height 1.55, 9px padding, 2px border); this top
+   padding centers the first row on the close button below. */
+.details {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: calc(16px - (41px - 28px) / 2);
+}
+
+.details .tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.details .tab-row {
+  flex: none;
+  padding-right: 36px;
+}
+
+/* The close button sits 16px from the top and the right, like the agents panel's, however many
+   rows the tabs wrap to in a narrow panel. */
+.details .tab-row > .icon-button {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+/* Scroll containers clip what's drawn outside their box, so the details panel's give focus rings,
+   which reach 4px out, room at the sides and the bottom. */
+.details .tab-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 4px 4px;
+}
+
+/* A tab panel whose content manages its own scrolling, like the chat. Its scroll containers make
+   the room for focus rings themselves. */
+.details .tab-panel-fill {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  padding: 0;
 }
 
 .panel-header {
@@ -492,6 +559,16 @@ body.resizing .resize-handle:focus::before {
 body.resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+/* At a limit, a one-way cursor shows the way the divider can still move, as in VS Code. */
+.resize-handle-e,
+body.resizing.resizing-e {
+  cursor: e-resize;
+}
+.resize-handle-w,
+body.resizing.resizing-w {
+  cursor: w-resize;
 }
 
 /* Agents */
@@ -876,6 +953,12 @@ td .pill,
     display: none;
   }
 
+  /* Stacked, the details panel gets a height of its own, so the chat keeps its composer in view. */
+  .details {
+    height: 90vh;
+    min-height: 420px;
+  }
+
   .layout > .panel + .panel {
     border-top: 1px solid var(--border);
   }
@@ -892,4 +975,295 @@ td .pill,
   .center {
     padding: 16px;
   }
+}
+
+/* Forms in cards: a label column and a field column. */
+.fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: center;
+  margin: 10px 0;
+}
+.fields label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.button-quiet {
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 12px;
+}
+.button-quiet:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+/* The file picker's button looks like the other secondary buttons. */
+input[type='file'] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+input[type='file']::file-selector-button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 12px;
+  margin-right: 10px;
+  cursor: pointer;
+}
+input[type='file']:hover::file-selector-button {
+  border-color: var(--border-strong);
+}
+.link-button {
+  font-size: inherit;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-button:hover {
+  color: var(--text);
+}
+.card h4,
+.traffic-detail h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 14px 0 4px;
+}
+.add-interface {
+  margin-top: 12px;
+}
+.add-interface form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.add-interface .fields {
+  flex: 1;
+  margin-bottom: 0;
+}
+.header-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.header-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Chat: the transcript scrolls between the header and the composer, which stays at the bottom. */
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.chat-head p {
+  margin: 0;
+}
+.chat-head .button-quiet {
+  margin-left: auto;
+}
+.chat-head {
+  flex: none;
+  padding: 0 4px;
+}
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bubble {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  min-width: 0;
+}
+.bubble-user {
+  background: var(--bg-subtle);
+  margin-left: 12%;
+}
+.bubble-error {
+  border-color: color-mix(in srgb, var(--fail) 35%, transparent);
+  background: color-mix(in srgb, var(--fail) 6%, var(--bg-raised));
+}
+.bubble-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.bubble-foot {
+  display: flex;
+  gap: 10px;
+  margin: 8px 0 0;
+}
+.bubble .text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0;
+}
+.bubble details {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.bubble .findings {
+  margin-top: 6px;
+}
+.artifact {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  margin-top: 8px;
+}
+.composer {
+  flex: none;
+  max-height: 60%;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 12px 4px 4px;
+}
+.composer-modes,
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.composer-actions .button {
+  margin-left: auto;
+}
+.composer details {
+  font-size: 13px;
+}
+.attachments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attachments li {
+  display: inline-flex;
+  align-items: center;
+}
+pre.json {
+  max-height: 40vh;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Traffic */
+.traffic-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+.traffic-head .button-quiet {
+  margin-left: auto;
+}
+.traffic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.traffic-list li + li {
+  border-top: 1px solid var(--border);
+}
+.traffic-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  background: var(--bg-raised);
+  border: none;
+  padding: 8px 10px;
+}
+/* The list clips its rows to its rounded corners, so their focus ring is drawn inside. */
+.traffic-row:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+}
+.traffic-row:hover,
+.traffic-list li.expanded .traffic-row {
+  background: var(--bg-subtle);
+}
+.traffic-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traffic-detail {
+  padding: 4px 12px 12px;
+  background: var(--bg-raised);
+  font-size: 13px;
+}
+.traffic-detail details {
+  margin: 4px 0;
+}
+table.headers th {
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.frames {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.frames p {
+  margin: 0;
+}
+.frames pre {
+  margin-top: 4px;
 }

@@ -1,22 +1,52 @@
-import { type AgentEntry, countFindings, describeCounts } from '../agents';
-import type { CallError, CardResolveResponse } from '../api/types';
-import { summarizeCard } from '../card';
+import type { ReactNode } from 'react';
+import { type AgentEntry, countFindings, describeCounts, interfacesOf } from '../agents';
+import type { AgentInterface, CallError, CardResolveResponse } from '../api/types';
+import { safeHref, summarizeCard } from '../card';
+import type { ConnectionSettings as Settings } from '../settings';
+import { ConnectionSettings } from './ConnectionSettings';
 import { InterfacePicker } from './InterfacePicker';
 
 interface Props {
   agent: AgentEntry | undefined;
+  /** Bindings the inspector supports. */
+  bindings: string[];
+  /** Whether the next message reconnects. */
+  stale: boolean;
   onSelectInterface: (index: number) => void;
+  onAddInterface: (iface: AgentInterface) => void;
+  onRemoveInterface: (index: number) => void;
+  onSettings: (settings: Settings) => void;
 }
 
-export function CardView({ agent, onSelectInterface }: Props) {
+export function CardView(props: Props) {
   return (
     <section className="panel center" aria-label="Agent card">
-      <CardContent agent={agent} onSelectInterface={onSelectInterface} />
+      <CardContent {...props} />
     </section>
   );
 }
 
-function CardContent({ agent, onSelectInterface }: Props) {
+/** The interface picker and connection settings, for every agent. */
+function Connect({ agent, bindings, stale, onSelectInterface, onAddInterface, onRemoveInterface, onSettings }: Props & { agent: AgentEntry }) {
+  return (
+    <>
+      <InterfacePicker
+        interfaces={interfacesOf(agent)}
+        defaultIndex={agent.result?.defaultInterface ?? null}
+        selected={agent.selectedInterface}
+        onSelect={onSelectInterface}
+        bindings={bindings}
+        onAdd={onAddInterface}
+        onRemove={onRemoveInterface}
+        emptyText={agent.result?.payload ? undefined : "Add the agent's interface by hand to send it messages."}
+      />
+      <ConnectionSettings settings={agent.settings} onChange={onSettings} connection={agent.connection} stale={stale} />
+    </>
+  );
+}
+
+function CardContent(props: Props) {
+  const { agent } = props;
   if (!agent) {
     return (
       <div className="empty">
@@ -32,12 +62,30 @@ function CardContent({ agent, onSelectInterface }: Props) {
       </p>
     );
   }
+  const connect = <Connect {...props} agent={agent} />;
+  if (agent.kind === 'endpoint') {
+    return (
+      <article className="overview">
+        <header className="overview-head">
+          <h2 className="break">{agent.url}</h2>
+          <p className="meta">
+            <span className="pill">No card</span>
+          </p>
+          <p className="muted">The inspector talks to this interface directly, without the agent's card.</p>
+        </header>
+        {connect}
+      </article>
+    );
+  }
   if (agent.error) {
     return (
-      <div role="alert" className="notice notice-error">
-        <h2>Couldn't fetch the card</h2>
-        <p>{agent.error}</p>
-      </div>
+      <>
+        <div role="alert" className="notice notice-error">
+          <h2>Couldn't fetch the card</h2>
+          <p>{agent.error}</p>
+        </div>
+        {connect}
+      </>
     );
   }
   const result = agent.result;
@@ -45,9 +93,14 @@ function CardContent({ agent, onSelectInterface }: Props) {
     return null;
   }
   if (result.call.error || !result.payload) {
-    return <CallFailure result={result} error={result.call.error} />;
+    return (
+      <>
+        <CallFailure result={result} error={result.call.error} />
+        {connect}
+      </>
+    );
   }
-  return <CardOverview agent={agent} result={result} onSelectInterface={onSelectInterface} />;
+  return <CardOverview agent={agent} result={result} connect={connect} />;
 }
 
 function CallFailure({ result, error }: { result: CardResolveResponse; error: CallError | null }) {
@@ -68,17 +121,6 @@ function CallFailure({ result, error }: { result: CardResolveResponse; error: Ca
   );
 }
 
-/** Returns url if it's an http(s) URL, so agent-supplied links can't run script. */
-function safeHref(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  try {
-    const { protocol } = new URL(url);
-    return protocol === 'http:' || protocol === 'https:' ? url : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function ExternalLink({ url }: { url: string }) {
   const href = safeHref(url);
   if (!href) {
@@ -95,7 +137,7 @@ function YesNo({ value }: { value: boolean }) {
   return <>{value ? 'Yes' : 'No'}</>;
 }
 
-function CardOverview({ agent, result, onSelectInterface }: { agent: AgentEntry; result: CardResolveResponse } & Pick<Props, 'onSelectInterface'>) {
+function CardOverview({ agent, result, connect }: { agent: AgentEntry; result: CardResolveResponse; connect: ReactNode }) {
   const payload = result.payload!;
   const card = summarizeCard(payload.raw, payload.protocolVersion);
   const counts = countFindings(payload.validation.findings);
@@ -119,12 +161,7 @@ function CardOverview({ agent, result, onSelectInterface }: { agent: AgentEntry;
         </p>
       </header>
 
-      <InterfacePicker
-        interfaces={result.interfaces}
-        defaultIndex={result.defaultInterface}
-        selected={agent.selectedInterface}
-        onSelect={onSelectInterface}
-      />
+      {connect}
 
       <section className="card" aria-labelledby={`${agent.id}-about`}>
         <h3 id={`${agent.id}-about`}>About</h3>

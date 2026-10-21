@@ -37,21 +37,21 @@ export interface CardSummary {
   securitySchemes: SecuritySchemeSummary[];
 }
 
-type JSONObject = Record<string, unknown>;
+export type JSONObject = Record<string, unknown>;
 
-function asObject(v: unknown): JSONObject {
+export function asObject(v: unknown): JSONObject {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as JSONObject) : {};
 }
 
-function asString(v: unknown): string | undefined {
+export function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-function asStrings(v: unknown): string[] {
+export function asStrings(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
-function asObjects(v: unknown): JSONObject[] {
+export function asObjects(v: unknown): JSONObject[] {
   return Array.isArray(v) ? v.map(asObject) : [];
 }
 
@@ -95,6 +95,17 @@ function schemeDetail(scheme: JSONObject, locationField: string): string | undef
     return `${keyName} in ${location}`;
   }
   return asString(scheme.scheme) ?? asString(scheme.openIdConnectUrl);
+}
+
+/** Returns url if it's an http(s) URL, so agent-supplied links can't run script. */
+export function safeHref(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function summarizeCard(raw: unknown, version: ProtocolVersion): CardSummary {

@@ -28,12 +28,14 @@ const (
 	v10SchemaURL = "https://a2a-inspector.invalid/schemas/a2a-v1.0.json"
 )
 
-type compiledSchemas struct {
-	v03Card *jsonschema.Schema
-	v10Card *jsonschema.Schema
+// schemaSet compiles definitions of the embedded schemas on first use.
+type schemaSet struct {
+	mu       sync.Mutex
+	compiler *jsonschema.Compiler
+	compiled map[string]*jsonschema.Schema
 }
 
-var schemas = sync.OnceValue(func() *compiledSchemas {
+var schemas = sync.OnceValue(func() *schemaSet {
 	c := jsonschema.NewCompiler()
 	for url, data := range map[string][]byte{v03SchemaURL: v03SchemaJSON, v10SchemaURL: v10SchemaJSON} {
 		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
@@ -44,18 +46,32 @@ var schemas = sync.OnceValue(func() *compiledSchemas {
 			panic(fmt.Sprintf("embedded schema %s: %v", url, err))
 		}
 	}
-	compile := func(loc string) *jsonschema.Schema {
-		s, err := c.Compile(loc)
-		if err != nil {
-			panic(fmt.Sprintf("compiling %s: %v", loc, err))
-		}
-		return s
-	}
-	return &compiledSchemas{
-		v03Card: compile(v03SchemaURL + "#/definitions/AgentCard"),
-		v10Card: compile(v10SchemaURL + "#/$defs/lf.a2a.v1.AgentCard"),
-	}
+	return &schemaSet{compiler: c, compiled: map[string]*jsonschema.Schema{}}
 })
+
+// v10Schema returns the v1.0 schema of a message, for example "lf.a2a.v1.Task".
+func v10Schema(message string) *jsonschema.Schema {
+	return schemas().get(v10SchemaURL + "#/$defs/" + message)
+}
+
+// v03Schema returns a definition of the v0.3 schema, for example "Task".
+func v03Schema(definition string) *jsonschema.Schema {
+	return schemas().get(v03SchemaURL + "#/definitions/" + definition)
+}
+
+func (s *schemaSet) get(loc string) *jsonschema.Schema {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if schema, ok := s.compiled[loc]; ok {
+		return schema
+	}
+	schema, err := s.compiler.Compile(loc)
+	if err != nil {
+		panic(fmt.Sprintf("compiling %s: %v", loc, err))
+	}
+	s.compiled[loc] = schema
+	return schema
+}
 
 var printer = message.NewPrinter(language.English)
 
@@ -161,7 +177,7 @@ func (e schemaError) message() string {
 // checkV03Card validates a card against the v0.3 JSON Schema.
 func checkV03Card(doc any) []Finding {
 	var out []Finding
-	for _, e := range schemaErrors(schemas().v03Card, doc) {
+	for _, e := range schemaErrors(v03Schema("AgentCard"), doc) {
 		out = append(out, e.findings()...)
 	}
 	return out

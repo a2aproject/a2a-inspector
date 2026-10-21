@@ -136,15 +136,17 @@ The container is now running in the background. Open your web browser and naviga
 
 ## Go version (in development)
 
-A Go rewrite of the inspector is in development and will replace the Python app. It's a single binary with the UI embedded: `cmd/a2a-inspector` is the command, `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go 1.26 or later.
+A Go rewrite of the inspector is in development and will replace the Python app. It's a single binary with the UI embedded: `cmd/a2a-inspector` is the command, `inspector/` the public package it runs (other builds can add transports and HTTP hooks through it), `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go 1.26 or later.
 
 ```sh
 go run ./cmd/a2a-inspector                   # serves on 127.0.0.1:8080 and opens the browser
 go run ./cmd/a2a-inspector -a localhost:9999 # opens with that agent's card
+go run ./cmd/a2a-inspector -e localhost:50051 --transport grpc --a2a-version 0.3  # an interface without a card
+go run ./cmd/a2a-inspector -a localhost:9999 --auth "Bearer $TOKEN" --svc-param X-Tenant=acme
 go test ./...
 ```
 
-The inspector prints a URL with a per-run token; the browser exchanges it for a session cookie. Run with `--help` for the flags.
+It talks to agents over JSON-RPC, HTTP+JSON and gRPC, in v1.0 and v0.3, through a2a-go, and records every exchange in the Traffic tab. The flags `-e/--endpoint`, `--transport`, `--a2a-version`, `--auth` and `--svc-param` work as in a2a-cli. The inspector prints a URL with a per-run token; the browser exchanges it for a session cookie. Run with `--help` for all the flags.
 
 To work on the UI, install its dependencies once (`npm install` in `ui/`), then:
 
@@ -152,4 +154,4 @@ To work on the UI, install its dependencies once (`npm install` in `ui/`), then:
 - `npm run lint`, `npm run typecheck` and `npm test` check the UI.
 - `npm run build` rebuilds `ui/dist`. Commit it together with the UI change; CI fails when it's out of date.
 
-`scripts/gen-schemas.sh` regenerates the A2A JSON Schemas the validator embeds.
+`scripts/gen-schemas.sh` regenerates the A2A JSON Schemas the validator embeds, and `npm run gen:types` in `ui/` the TypeScript types generated from them.

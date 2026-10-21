@@ -115,4 +115,33 @@ describe('ResizeHandle', () => {
     await user.dblClick(handle);
     expect(onReset).toHaveBeenCalled();
   });
+
+  it.each([
+    ['left', panelLimits.left.min, 'e'],
+    ['left', panelLimits.left.max, 'w'],
+    ['right', panelLimits.right.min, 'w'],
+    ['right', panelLimits.right.max, 'e'],
+  ] as const)('shows a one-way cursor for the %s panel at width %d', (side, width, direction) => {
+    const { handle } = renderHandle(side, width);
+    expect(handle).toHaveClass(`resize-handle-${direction}`);
+  });
+
+  it('keeps the one-way cursor while a drag pushes past the minimum and closes the panel', () => {
+    const { handle } = renderHandle('left', 300);
+    expect(handle).not.toHaveClass('resize-handle-e');
+    fireEvent.pointerDown(handle, { button: 0, clientX: 300 });
+    expect(document.body).toHaveClass('resizing');
+    expect(document.body).not.toHaveClass('resizing-e');
+
+    fireEvent.pointerMove(window, { clientX: 150 });
+    expect(document.body).toHaveClass('resizing-e');
+    fireEvent.pointerMove(window, { clientX: 50 });
+    expect(document.body).toHaveClass('resizing-e');
+    fireEvent.pointerMove(window, { clientX: 320 });
+    expect(document.body).not.toHaveClass('resizing-e');
+
+    fireEvent.pointerUp(window);
+    expect(document.body).not.toHaveClass('resizing');
+    expect(document.body.className).not.toMatch(/resizing-[ew]/);
+  });
 });

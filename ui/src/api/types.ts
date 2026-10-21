@@ -34,20 +34,26 @@ export interface AgentInterface {
   tenant?: string;
   /** Whether the inspector can talk to this interface. */
   supported: boolean;
-  /** Where the card declares it, for example "supportedInterfaces[1]". */
+  /** Where the card declares it, for example "supportedInterfaces[1]", or "custom". */
   source: string;
 }
 
 export interface CallError {
+  /** The error's name in the specification, for example "TaskNotFoundError". */
+  a2aError?: string;
   message: string;
-  /** HTTP status, when the agent answered. */
+  /** The JSON-RPC error code, HTTP status or gRPC status code. */
   code?: number;
   raw?: unknown;
 }
 
 export interface Call {
+  /** The exchange on the wire, in the traffic log. */
+  trafficEntryId?: string;
   latencyMs: number;
   error: CallError | null;
+  /** About the call rather than the payload, such as an operation the card doesn't declare. */
+  findings?: Finding[];
 }
 
 export interface CardResolveResponse {
@@ -60,9 +66,180 @@ export interface CardResolveResponse {
   call: Call;
 }
 
+/** A credential: a value kept in backend memory, an environment variable, or a stored one by reference. */
+export interface SecretInput {
+  value?: string;
+  envVar?: string;
+  ref?: string;
+}
+
+/** A stored credential as the UI sees it: never its value. */
+export interface SecretView {
+  ref: string;
+  masked: string;
+  envVar?: string;
+}
+
+export interface HeaderInput {
+  name: string;
+  value?: string;
+  secret?: SecretInput;
+}
+
+export interface HeaderView {
+  name: string;
+  value?: string;
+  secret?: SecretView;
+}
+
+export type AuthInput =
+  | { bearer: SecretInput }
+  | { basic: { username: string; password: SecretInput } }
+  | { apiKey: { header: string; key: SecretInput } };
+
+export interface AuthView {
+  type: 'bearer' | 'basic' | 'apiKey';
+  username?: string;
+  header?: string;
+  secret: SecretView;
+}
+
+export interface Preferences {
+  bindings?: string[];
+  version?: string;
+}
+
+/** The agent given on the command line. */
+export interface Startup {
+  agentCardUrl?: string;
+  /** From --endpoint, --transport and --a2a-version. */
+  endpoint?: AgentInterface;
+  preferences?: Preferences;
+  /** From --auth and --svc-param. */
+  headers: HeaderView[];
+}
+
 export interface Config {
   mode: 'local' | 'hosted';
   /** The agent given with --agent-card. */
   agentCardUrl?: string;
+  startup?: Startup;
   features: { serve: boolean; webhooks: boolean };
+  /** Protocol bindings the inspector supports. */
+  bindings?: string[];
+}
+
+export interface ConnectionRequest {
+  cardUrl?: string;
+  card?: unknown;
+  interface?: { url: string; protocolBinding: string; protocolVersion: string; tenant?: string };
+  auth?: AuthInput;
+  headers?: HeaderInput[];
+  extensions?: string[];
+  tenant?: string;
+  /** Continues a conversation, for example one an earlier connection had. */
+  contextId?: string;
+}
+
+export interface Connection {
+  id: string;
+  cardUrl?: string;
+  card?: AgentPayload;
+  interface: AgentInterface;
+  custom: boolean;
+  availableInterfaces: AgentInterface[];
+  auth?: AuthView;
+  headers: HeaderView[];
+  extensions: string[];
+  tenant?: string;
+  contextId?: string;
+}
+
+export interface Attachment {
+  name?: string;
+  mediaType?: string;
+  /** Base64. */
+  bytes?: string;
+  url?: string;
+}
+
+export interface Compose {
+  text: string;
+  attachments?: Attachment[];
+  data?: unknown;
+  metadata?: Record<string, unknown>;
+  extensions?: string[];
+}
+
+export interface SendRequest {
+  compose?: Compose;
+  /** A message in the connection's own version and binding format, sent as written. */
+  rawMessage?: string;
+  options?: {
+    newContext?: boolean;
+    returnImmediately?: boolean;
+    historyLength?: number;
+    acceptedOutputModes?: string[];
+  };
+}
+
+/** What every agent operation returns, and what each event of a stream carries. */
+export interface AgentResult {
+  payload?: AgentPayload;
+  call: Call;
+  /** The conversation the connection continues after this result. */
+  contextId?: string;
+}
+
+export interface WireHeader {
+  name: string;
+  value: string;
+}
+
+export interface Frame {
+  time: string;
+  event: string;
+  id?: string;
+  data: string;
+}
+
+export interface HTTPExchange {
+  method: string;
+  url: string;
+  requestHeaders: WireHeader[];
+  requestBody: string;
+  status?: number;
+  responseHeaders?: WireHeader[];
+  responseBody: string;
+  sseFrames?: Frame[];
+  truncated?: boolean;
+}
+
+export interface GRPCMessage {
+  fromClient: boolean;
+  time: string;
+  json: unknown;
+}
+
+export interface GRPCExchange {
+  target: string;
+  fullMethod: string;
+  metadata: WireHeader[];
+  messages: GRPCMessage[];
+  headers?: WireHeader[];
+  statusCode?: string;
+  statusMessage?: string;
+  trailers?: WireHeader[];
+  truncated?: boolean;
+}
+
+export interface TrafficEntry {
+  id: string;
+  connectionId?: string;
+  startTime: string;
+  /** Null while the exchange is in progress. */
+  durationMs: number | null;
+  error?: string;
+  http?: HTTPExchange;
+  grpc?: GRPCExchange;
 }
