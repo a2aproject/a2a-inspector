@@ -112,9 +112,12 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	case err := <-served:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return srv.Close()
 	}
 }
 

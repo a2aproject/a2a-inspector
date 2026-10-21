@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -151,6 +152,31 @@ func TestRun(t *testing.T) {
 			t.Errorf("run() after cancel = %v, want nil", r.err)
 		}
 	case <-time.After(5 * time.Second):
+		t.Fatal("the inspector didn't stop")
+	}
+}
+
+func TestStopWithIdleConnection(t *testing.T) {
+	r := start(t, "--port", "0", "--no-open")
+	u, err := url.Parse(r.waitForURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A connection that never sends a request, like a browser's preconnect.
+	conn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	r.cancel()
+	select {
+	case <-r.done:
+		if r.err != nil {
+			t.Errorf("run() after cancel = %v, want nil", r.err)
+		}
+	case <-time.After(3 * time.Second):
 		t.Fatal("the inspector didn't stop")
 	}
 }
