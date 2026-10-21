@@ -133,3 +133,23 @@ The container is now running in the background. Open your web browser and naviga
 ### 4. Inspect your agents
 
 - Try inputting a sample agent URL such as `https://sample-a2a-agent-908687846511.us-central1.run.app`
+
+## Go version (in development)
+
+A Go rewrite of the inspector is in development and will replace the Python app. It's a single binary with the UI embedded: `cmd/a2a-inspector` is the command, `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go 1.26 or later.
+
+```sh
+go run ./cmd/a2a-inspector                   # serves on 127.0.0.1:8080 and opens the browser
+go run ./cmd/a2a-inspector -a localhost:9999 # opens with that agent's card
+go test ./...
+```
+
+The inspector prints a URL with a per-run token; the browser exchanges it for a session cookie. Run with `--help` for the flags.
+
+To work on the UI, install its dependencies once (`npm install` in `ui/`), then:
+
+- `npm run dev` starts a dev server that proxies the API to an inspector on port 8080 (set `A2A_INSPECTOR_URL` for another one). Open the inspector's printed URL first so the browser has the session cookie, then the dev server's URL.
+- `npm run lint`, `npm run typecheck` and `npm test` check the UI.
+- `npm run build` rebuilds `ui/dist`. Commit it together with the UI change; CI fails when it's out of date.
+
+`scripts/gen-schemas.sh` regenerates the A2A JSON Schemas the validator embeds.

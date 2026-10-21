@@ -8,6 +8,22 @@ updates:
       npm-dependencies:
         patterns:
           - '*'
+  - package-ecosystem: 'npm'
+    directory: '/ui'
+    schedule:
+      interval: 'monthly'
+    groups:
+      ui-npm-dependencies:
+        patterns:
+          - '*'
+  - package-ecosystem: 'gomod'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+    groups:
+      go-dependencies:
+        patterns:
+          - '*'
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:

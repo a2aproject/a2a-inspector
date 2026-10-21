@@ -341,3 +341,7 @@ poetry.toml
 pyrightconfig.json
 
 frontend/public/script.js
+
+# Go inspector: the built UI is committed so the Go module embeds it; the binary isn't.
+!/ui/dist/
+/a2a-inspector

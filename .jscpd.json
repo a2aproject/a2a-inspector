@@ -1,5 +1,17 @@
 {
-  "ignore": ["**/.github/**", "**/.git/**", "**/tests/**", "**/.nox/**", "**/.venv/**"],
+  "ignore": [
+    "**/.github/**",
+    "**/.git/**",
+    "**/tests/**",
+    "**/.nox/**",
+    "**/.venv/**",
+    "**/node_modules/**",
+    "**/ui/dist/**",
+    "**/internal/validate/schemas/**",
+    "**/*_test.go",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ],
   "threshold": 3,
   "reporters": ["html", "markdown"]
 }
