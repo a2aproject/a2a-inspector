@@ -1,0 +1,895 @@
+/* The a2a-itk dashboard's theme: a monochrome true-neutral scale with near-black and near-white
+   accents, set in IBM Plex. Status colors are the only color on the page. */
+
+:root {
+  --bg: #f4f4f4;
+  --bg-subtle: #ebebeb;
+  --bg-raised: #fcfcfc;
+  --border: #e0e0e0;
+  --border-strong: #c6c6c6;
+  --text: #171717;
+  --text-muted: #525252;
+  --text-faint: #636363;
+  --accent: #09090b;
+  --on-accent: #fafafa;
+  /* Validation: pass is no problems, fail is an error, mixed is a warning, skip is a note. */
+  --pass: #065f46;
+  --fail: #991b1b;
+  --mixed: #92400e;
+  --skip: #52525b;
+  --focus: #2563eb;
+
+  --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 10px;
+
+  color-scheme: light;
+}
+
+/* `auto` follows the OS; the theme toggle sets an explicit data-theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0a0a0a;
+    --bg-subtle: #161616;
+    --bg-raised: #121212;
+    --border: #262626;
+    --border-strong: #3d3d3d;
+    --text: #e5e5e5;
+    --text-muted: #a3a3a3;
+    --text-faint: #8a8a8a;
+    --accent: #fafafa;
+    --on-accent: #0a0a0a;
+    --pass: #34d399;
+    --fail: #f87171;
+    --mixed: #fbbf24;
+    --skip: #a1a1aa;
+    --focus: #60a5fa;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --bg-subtle: #161616;
+  --bg-raised: #121212;
+  --border: #262626;
+  --border-strong: #3d3d3d;
+  --text: #e5e5e5;
+  --text-muted: #a3a3a3;
+  --text-faint: #8a8a8a;
+  --accent: #fafafa;
+  --on-accent: #0a0a0a;
+  --pass: #34d399;
+  --fail: #f87171;
+  --mixed: #fbbf24;
+  --skip: #a1a1aa;
+  --focus: #60a5fa;
+}
+
+/* Closed panels use the `hidden` attribute, which a display rule on a class would otherwise beat. */
+[hidden] {
+  display: none !important;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  scrollbar-color: var(--text-faint) transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+p {
+  margin: 0 0 0.5rem;
+}
+
+a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+pre {
+  margin: 0.75rem 0 0;
+  padding: 12px 14px;
+  overflow: auto;
+  max-height: 60vh;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.small {
+  font-size: 12.5px;
+}
+
+.break {
+  overflow-wrap: anywhere;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Controls */
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.button {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 5px 14px;
+}
+
+.icon-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.icon-button:hover {
+  color: var(--text);
+  background: var(--bg-subtle);
+}
+
+/* Pill buttons, as the dashboard's theme toggle. */
+.theme-toggle,
+.toggle {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
+.theme-toggle:hover,
+.toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.toggle[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+
+input[type='text'] {
+  font: inherit;
+  font-size: 13.5px;
+  color: inherit;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+input[type='text']:hover {
+  border-color: var(--border-strong);
+}
+
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+/* Pills and chips */
+
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  border-radius: 999px;
+  padding: 1px 9px;
+  white-space: nowrap;
+}
+
+.chip-pass {
+  color: var(--pass);
+  background: color-mix(in srgb, var(--pass) 14%, transparent);
+}
+
+.chip-fail {
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 14%, transparent);
+}
+
+.chip-mixed {
+  color: var(--mixed);
+  background: color-mix(in srgb, var(--mixed) 16%, transparent);
+}
+
+.chip-skip {
+  color: var(--skip);
+  background: color-mix(in srgb, var(--skip) 14%, transparent);
+}
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--skip);
+}
+
+.dot-pass {
+  background: var(--pass);
+}
+
+.dot-fail {
+  background: var(--fail);
+}
+
+.dot-mixed {
+  background: var(--mixed);
+}
+
+/* Cards and notices */
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  min-width: 0;
+}
+
+.card + .card {
+  margin-top: 14px;
+}
+
+.card h3,
+.card legend {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  margin-bottom: 10px;
+}
+
+.notice {
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.notice h2 {
+  font-size: 16px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.notice-error {
+  color: var(--text);
+  background: color-mix(in srgb, var(--fail) 8%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--fail) 35%, transparent);
+}
+
+.notice-error h2 {
+  color: var(--fail);
+}
+
+/* Top bar */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  flex: none;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-inner {
+  height: 52px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.brand h1 {
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.brand strong {
+  font-weight: 600;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.panel-toggles {
+  display: flex;
+  gap: 6px;
+}
+
+.message-page {
+  max-width: 40rem;
+  margin: 48px auto;
+  padding: 0 16px;
+}
+
+/* Panels */
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* Set from the panel layout in App.tsx. */
+  grid-template-columns: var(--layout-columns, minmax(0, 1fr));
+}
+
+.panel {
+  padding: 16px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* Not uppercased with text-transform: browsers put the transformed text in the panel's
+   accessible name, and this heading names the agents landmark. */
+.panel-header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.center {
+  padding: 20px 24px;
+}
+
+/* A 7px grab area with a 1px line, which thickens while hovered, focused or dragged. */
+.resize-handle {
+  position: relative;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resize-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: var(--border);
+}
+
+.resize-handle:hover::before {
+  inset: 0 2px;
+  background: var(--border-strong);
+}
+
+.resize-handle:focus-visible::before,
+body.resizing .resize-handle:focus::before {
+  inset: 0 2px;
+  background: var(--focus);
+}
+
+.resize-handle:focus-visible {
+  outline: none;
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Agents */
+
+.add-agent label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.help {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.agent-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.agent-list li {
+  display: flex;
+  align-items: flex-start;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  margin-bottom: 4px;
+}
+
+.agent-list li:hover {
+  background: var(--bg-subtle);
+}
+
+.agent-list li.selected {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+}
+
+.agent-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 7px 10px;
+}
+
+.agent-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.agent-url {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.agent-list .icon-button {
+  margin: 4px 4px 0 0;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Card overview */
+
+.overview-head {
+  margin-bottom: 20px;
+}
+
+.overview-head h2 {
+  font-size: clamp(22px, 2.4vw, 28px);
+  margin-bottom: 8px;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.overview-head > p {
+  color: var(--text-muted);
+}
+
+.empty {
+  max-width: 32rem;
+  margin: 48px auto;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty h2 {
+  font-size: 18px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+/* The fieldset is a card; the floated legend sits inside it like a card heading. */
+fieldset.card {
+  margin: 0;
+}
+
+fieldset.card legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+
+fieldset.card legend + * {
+  clear: both;
+}
+
+.note {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--mixed);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 20px;
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.facts dt {
+  color: var(--text-faint);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+.plain p {
+  margin: 2px 0 0;
+}
+
+.skills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.skills > li + li {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.skills p {
+  margin: 0 0 4px;
+}
+
+.skill-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.examples {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+details summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* Tables, as the dashboard's matrix: small uppercase headers, quiet row rules. */
+
+.table-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+thead th {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  border-bottom-color: var(--border-strong);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover td {
+  background: var(--bg-subtle);
+}
+
+tr.unsupported {
+  color: var(--text-faint);
+}
+
+td .pill,
+.plain .pill {
+  margin-left: 6px;
+}
+
+/* Tabs, underlined as the dashboard's SDK tabs */
+
+.tab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.tab-list {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.tab-list [role='tab'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.tab-list [role='tab']:hover {
+  color: var(--text);
+}
+
+.tab-list [role='tab'][aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.count {
+  font-size: 11px;
+  padding: 0 7px;
+}
+
+/* Validation */
+
+.summary {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.findings {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.finding {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--skip);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.finding-error {
+  border-left-color: var(--fail);
+}
+
+.finding-warning {
+  border-left-color: var(--mixed);
+}
+
+.finding-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.finding .path {
+  overflow-wrap: anywhere;
+}
+
+.finding .rule {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.finding .message {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.finding .hint {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .app {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .resize-handle {
+    display: none;
+  }
+
+  .layout > .panel + .panel {
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar-inner {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    gap: 8px 16px;
+  }
+
+  .center {
+    padding: 16px;
+  }
+}

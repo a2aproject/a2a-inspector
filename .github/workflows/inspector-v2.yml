@@ -1,0 +1,77 @@
+name: Inspector v2 (Go and UI)
+
+on:
+  pull_request:
+    branches: [main, epic/inspector-v2]
+  push:
+    branches: [epic/inspector-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          # go vet's stdversion check flags standard library APIs newer than go.mod's go version.
+          go-version: stable
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test -race ./...
+
+  ui:
+    name: UI lint, type check, test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Check that ui/dist is up to date
+        run: |
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            echo "ui/dist doesn't match the UI sources. Run 'npm run build' in ui/ and commit ui/dist."
+            git status --porcelain -- dist
+            exit 1
+          fi
