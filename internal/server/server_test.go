@@ -294,7 +294,7 @@ func agentServer(t *testing.T) *httptest.Server {
 
 func TestCardResolve(t *testing.T) {
 	agent := agentServer(t)
-	s := newServer(t, Options{HTTPClient: agent.Client()})
+	s := newServer(t, Options{HTTPTransport: agent.Client().Transport})
 	resolve := func(t *testing.T, url string) (*httptest.ResponseRecorder, cardResolveResponse) {
 		t.Helper()
 		body, _ := json.Marshal(cardResolveRequest{URL: url})

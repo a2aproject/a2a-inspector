@@ -6,6 +6,8 @@ export interface Tab {
   /** Shown after the label, for example a count. */
   badge?: ReactNode;
   content: ReactNode;
+  /** The content fills the panel and scrolls on its own, instead of the panel scrolling. */
+  fill?: boolean;
 }
 
 interface Props {
@@ -13,11 +15,19 @@ interface Props {
   tabs: Tab[];
   /** Controls shown at the end of the tab row, outside the tab list. */
   actions?: ReactNode;
+  /** The active tab, when the parent controls it. */
+  active?: string;
+  onChange?: (id: string) => void;
 }
 
 /** Tabs following the WAI-ARIA tabs pattern: arrow keys, Home and End move between tabs. */
-export function Tabs({ label, tabs, actions }: Props) {
-  const [active, setActive] = useState(tabs[0]?.id);
+export function Tabs({ label, tabs, actions, active: controlled, onChange }: Props) {
+  const [own, setOwn] = useState(tabs[0]?.id);
+  const active = controlled ?? own;
+  const setActive = (id: string) => {
+    setOwn(id);
+    onChange?.(id);
+  };
   const baseId = useId();
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -79,7 +89,7 @@ export function Tabs({ label, tabs, actions }: Props) {
           role="tabpanel"
           id={`${baseId}-panel-${tab.id}`}
           aria-labelledby={`${baseId}-tab-${tab.id}`}
-          className="tab-panel"
+          className={tab.fill ? 'tab-panel tab-panel-fill' : 'tab-panel'}
           tabIndex={0}
           hidden={tab.id !== active}
         >

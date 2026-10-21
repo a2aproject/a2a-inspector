@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
+
+	"github.com/a2aproject/a2a-inspector/internal/agents"
+	"github.com/a2aproject/a2a-inspector/internal/traffic"
 )
 
 // contentSecurityPolicy allows only the inspector's own scripts, styles and API.
@@ -32,21 +35,54 @@ type Options struct {
 	Token string
 	// AgentCardURL, if set, is the agent the UI opens on start.
 	AgentCardURL string
+	// Endpoint, if set, is an interface the UI connects to on start without
+	// a card.
+	Endpoint *agents.Interface
+	// Preferences pick the interface of the AgentCardURL agent.
+	Preferences Preferences
+	// StartupHeaders are sent to the agent opened on start, from --auth and
+	// --svc-param.
+	StartupHeaders []StartupHeader
 	// UI holds the built UI, with index.html at its root.
 	UI fs.FS
-	// HTTPClient fetches agent cards. It defaults to a client with a
-	// 30-second timeout.
-	HTTPClient *http.Client
+	// HTTPTransport sends the inspector's requests to agents. It defaults to
+	// http.DefaultTransport; the inspector records the traffic around it.
+	HTTPTransport http.RoundTripper
+	// Transports adds protocol bindings beyond the core ones.
+	Transports []agents.Transport
+}
+
+// Preferences choose among a card's interfaces, from --transport and --a2a-version.
+type Preferences struct {
+	// Bindings are protocol bindings, most preferred first.
+	Bindings []string `json:"bindings,omitempty"`
+	Version  string   `json:"version,omitempty"`
+}
+
+// StartupHeader is a header given on the command line.
+type StartupHeader struct {
+	Name, Value string
+	// Secret keeps the value out of the UI.
+	Secret bool
 }
 
 // Server is the inspector's HTTP handler.
 type Server struct {
 	opts         Options
+	traffic      *traffic.Log
 	client       *http.Client
+	dialer       *agents.Dialer
+	secrets      *secretStore
+	conns        *connections
+	startup      *startupConfig
 	mux          *http.ServeMux
 	cookieName   string
 	anyHost      bool
 	allowedHosts map[string]bool
+	// ctx ends when the server closes; calls to agents and the traffic feed
+	// end with it, so shutting down doesn't wait for agents.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // New returns a Server for opts.
@@ -57,25 +93,69 @@ func New(opts Options) (*Server, error) {
 	if opts.UI == nil {
 		return nil, errors.New("server: no UI files")
 	}
+	log := traffic.NewLog(0)
+	// No client timeout: streams last as long as the UI follows them, and
+	// each call bounds itself with its context.
+	client := &http.Client{Transport: &traffic.Transport{Log: log, Base: opts.HTTPTransport}}
 	s := &Server{
-		opts:       opts,
-		client:     opts.HTTPClient,
+		opts:    opts,
+		traffic: log,
+		client:  client,
+		dialer: &agents.Dialer{
+			HTTPClient:      client,
+			GRPCDialOptions: log.DialOptions(),
+			Transports:      opts.Transports,
+		},
+		secrets:    newSecretStore(),
+		conns:      &connections{items: map[string]*connection{}},
 		mux:        http.NewServeMux(),
 		cookieName: fmt.Sprintf("a2a_inspector_%d", opts.Port),
 	}
-	if s.client == nil {
-		s.client = &http.Client{Timeout: 30 * time.Second}
-	}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
+	startup, err := s.newStartupConfig()
+	if err != nil {
+		return nil, err
+	}
+	s.startup = startup
 
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/card:resolve", s.handleCardResolve)
 	s.mux.HandleFunc("POST /api/card:validate", s.handleCardValidate)
+	s.mux.HandleFunc("POST /api/connections", s.handleCreateConnection)
+	s.mux.HandleFunc("GET /api/connections/{id}", s.handleGetConnection)
+	s.mux.HandleFunc("DELETE /api/connections/{id}", s.handleDeleteConnection)
+	s.mux.HandleFunc("POST /api/connections/{id}/messages:send", s.handleSend)
+	s.mux.HandleFunc("POST /api/connections/{id}/messages:stream", s.handleStream)
+	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Unknown API endpoint.")
 	})
 	s.mux.HandleFunc("/", s.handleUI)
 	return s, nil
+}
+
+// Close ends the long-lived streams, such as the traffic feed, so the HTTP
+// server can shut down, and closes the connections to agents.
+func (s *Server) Close() {
+	s.cancel()
+	s.conns.mu.Lock()
+	defer s.conns.mu.Unlock()
+	for id, c := range s.conns.items {
+		_ = c.client.Destroy()
+		delete(s.conns.items, id)
+	}
+}
+
+// callContext is the context of a call to an agent: it ends with the request
+// or when the server closes.
+func (s *Server) callContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(r.Context())
+	stop := context.AfterFunc(s.ctx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // allowedHosts returns the Host header values the server accepts. When it

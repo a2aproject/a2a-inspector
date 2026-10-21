@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { type AgentsState, agentsReducer, findAgent, initialAgentsState } from './agents';
 import type { AgentInterface, CardResolveResponse } from './api/types';
+import { defaultSettings } from './settings';
+
+const initialSettings = () => defaultSettings;
 
 const cardUrl = 'http://localhost:9999/.well-known/agent-card.json';
 
@@ -71,6 +74,18 @@ describe('agentsReducer', () => {
     expect(state).toMatchObject({ selectedId: 'a', agents: [{ id: 'a' }] });
     state = agentsReducer(state, { type: 'remove', id: 'a' });
     expect(state).toEqual({ agents: [], selectedId: null });
+  });
+
+  it('forgets a connection once it is closed, so a failed reconnect cannot reuse it', () => {
+    const connection = { id: 'conn-1', interface: iface('JSONRPC'), custom: false, availableInterfaces: [], headers: [], extensions: [] };
+    const connected = run(
+      { type: 'add', id: 'a', url: 'localhost:9999' },
+      { type: 'connected', id: 'a', connection, key: 'k', settings: initialSettings() },
+    );
+    expect(connected.agents[0]).toMatchObject({ connection: { id: 'conn-1' }, connectionKey: 'k' });
+    const closed = agentsReducer(connected, { type: 'disconnected', id: 'a' });
+    expect(closed.agents[0]?.connection).toBeUndefined();
+    expect(closed.agents[0]?.connectionKey).toBeUndefined();
   });
 
   it('ignores results for agents that were removed meanwhile', () => {

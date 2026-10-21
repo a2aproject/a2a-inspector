@@ -1,17 +1,24 @@
-package main
+package inspector
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-inspector/internal/server"
+	"github.com/spf13/pflag"
 )
 
 // syncBuffer is a bytes.Buffer safe for the concurrent writes of a running command.
@@ -45,7 +52,7 @@ func start(t *testing.T, args ...string) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &running{stdout: &syncBuffer{}, stderr: &syncBuffer{}, opened: make(chan string, 1), done: make(chan struct{}), cancel: cancel}
-	cmd := newRootCmd(r.stdout, r.stderr, func(url string) error {
+	cmd := newCommand(Options{}, r.stdout, r.stderr, func(url string) error {
 		r.opened <- url
 		return nil
 	})
@@ -166,7 +173,7 @@ func TestPortInUse(t *testing.T) {
 	defer ln.Close()
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	cmd := newRootCmd(&syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
+	cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
 	cmd.SetArgs([]string{"--port", strconv.Itoa(port)})
 	err = cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "already in use") || !strings.Contains(err.Error(), "--port") {
@@ -176,7 +183,7 @@ func TestPortInUse(t *testing.T) {
 
 func TestFlagErrors(t *testing.T) {
 	for _, args := range [][]string{{"-a", "./card.json"}, {"unexpected"}} {
-		cmd := newRootCmd(&syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
+		cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
 		cmd.SetArgs(args)
 		if err := cmd.Execute(); err == nil {
 			t.Errorf("Execute(%v) succeeded", args)
@@ -185,7 +192,7 @@ func TestFlagErrors(t *testing.T) {
 }
 
 func TestDefaults(t *testing.T) {
-	cmd := newRootCmd(&syncBuffer{}, &syncBuffer{}, nil)
+	cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, nil)
 	for flag, want := range map[string]string{"port": "8080", "host": "127.0.0.1", "no-open": "false", "agent-card": ""} {
 		if got := cmd.Flags().Lookup(flag).DefValue; got != want {
 			t.Errorf("--%s default = %q, want %q", flag, got, want)
@@ -221,5 +228,80 @@ func TestStartURL(t *testing.T) {
 		if got := startURL(tc.host, 8080, "t"); got != tc.want {
 			t.Errorf("startURL(%q) = %q, want %q", tc.host, got, tc.want)
 		}
+	}
+}
+
+func TestServerOptions(t *testing.T) {
+	stubby := Transport{
+		Protocol: "STUBBY",
+		Factory: a2aclient.TransportFactoryFn(func(context.Context, *a2a.AgentCard, *a2a.AgentInterface) (a2aclient.Transport, error) {
+			return nil, errors.New("not in tests")
+		}),
+	}
+	opts := Options{Transports: []Transport{stubby}}
+	tests := []struct {
+		name    string
+		flags   flags
+		wantErr string
+		check   func(t *testing.T, so server.Options)
+	}{
+		{name: "endpoint", flags: flags{endpoint: "localhost:9000", transports: []string{"grpc"}, a2aVersion: "0.3"}, check: func(t *testing.T, so server.Options) {
+			if e := so.Endpoint; e == nil || e.URL != "localhost:9000" || e.ProtocolBinding != "GRPC" || e.ProtocolVersion != "0.3" {
+				t.Errorf("endpoint = %+v", e)
+			}
+		}},
+		{name: "endpoint defaults to 1.0", flags: flags{endpoint: "http://a", transports: []string{"rest"}}, check: func(t *testing.T, so server.Options) {
+			if e := so.Endpoint; e.ProtocolBinding != "HTTP+JSON" || e.ProtocolVersion != "1.0" {
+				t.Errorf("endpoint = %+v", e)
+			}
+		}},
+		{name: "registered transport", flags: flags{endpoint: "blade:agent", transports: []string{"stubby"}}, check: func(t *testing.T, so server.Options) {
+			if so.Endpoint.ProtocolBinding != "STUBBY" || len(so.Transports) != 1 {
+				t.Errorf("endpoint = %+v, transports = %+v", so.Endpoint, so.Transports)
+			}
+		}},
+		{name: "card with preferences and headers", flags: flags{agentCard: "localhost:9999", transports: []string{"grpc", "jsonrpc"}, auth: "Bearer t", svcParams: []string{"X-Tenant=acme", "X-Api-Key:k"}}, check: func(t *testing.T, so server.Options) {
+			if so.AgentCardURL != "http://localhost:9999/.well-known/agent-card.json" || !slices.Equal(so.Preferences.Bindings, []string{"GRPC", "JSONRPC"}) {
+				t.Errorf("options = %+v", so)
+			}
+			want := []server.StartupHeader{{Name: "X-Tenant", Value: "acme"}, {Name: "X-Api-Key", Value: "k", Secret: true}, {Name: "Authorization", Value: "Bearer t", Secret: true}}
+			if !slices.Equal(so.StartupHeaders, want) {
+				t.Errorf("headers = %+v, want %+v", so.StartupHeaders, want)
+			}
+		}},
+		{name: "endpoint and card", flags: flags{agentCard: "a", endpoint: "b", transports: []string{"rest"}}, wantErr: "mutually exclusive"},
+		{name: "endpoint without transport", flags: flags{endpoint: "http://a"}, wantErr: "exactly one --transport"},
+		{name: "endpoint with two transports", flags: flags{endpoint: "http://a", transports: []string{"rest", "grpc"}}, wantErr: "exactly one --transport"},
+		{name: "unknown transport", flags: flags{endpoint: "http://a", transports: []string{"carrier-pigeon"}}, wantErr: "unknown transport"},
+		{name: "unknown version", flags: flags{endpoint: "http://a", transports: []string{"rest"}, a2aVersion: "2"}, wantErr: "--a2a-version"},
+		{name: "registered transport without v0.3", flags: flags{endpoint: "blade:agent", transports: []string{"stubby"}, a2aVersion: "0.3"}, wantErr: "doesn't support version 0.3"},
+		{name: "transport without agent", flags: flags{transports: []string{"rest"}}, wantErr: "need --agent-card or --endpoint"},
+		{name: "auth without agent", flags: flags{auth: "Bearer t"}, wantErr: "need --agent-card or --endpoint"},
+		{name: "bad service parameter", flags: flags{agentCard: "a.example.com", svcParams: []string{"novalue"}}, wantErr: "key=value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			so, err := serverOptions(opts, tt.flags)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("serverOptions() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("serverOptions() error = %v", err)
+			}
+			tt.check(t, so)
+		})
+	}
+}
+
+func TestTransportFlags(t *testing.T) {
+	var renamed string
+	cmd := newCommand(Options{Transports: []Transport{{Protocol: "STUBBY", AddFlags: func(fs *pflag.FlagSet) {
+		fs.StringVar(&renamed, "renamed-as", "", "Service name")
+	}}}}, &syncBuffer{}, &syncBuffer{}, nil)
+	if err := cmd.ParseFlags([]string{"--renamed-as", "svc"}); err != nil || renamed != "svc" {
+		t.Errorf("ParseFlags() = %v, renamed = %q", err, renamed)
 	}
 }

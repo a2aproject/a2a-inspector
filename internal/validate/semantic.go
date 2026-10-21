@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"maps"
 	"mime"
 	"net"
 	"net/url"
@@ -272,7 +273,7 @@ func securityFindings(card map[string]any) []Finding {
 				req, _ = req["schemes"].(map[string]any)
 				reqPath = joinPath(reqPath, "schemes")
 			}
-			for _, name := range sortedKeys(req) {
+			for _, name := range slices.Sorted(maps.Keys(req)) {
 				if _, ok := schemes[name]; !ok {
 					out = append(out, Finding{
 						Severity: SeverityWarning,
@@ -293,15 +294,6 @@ func securityFindings(card map[string]any) []Finding {
 		check(joinPath(indexPath("skills", i), "security"), skill["security"], false)
 	}
 	return out
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 // Operation is an A2A operation, named as in the specification.

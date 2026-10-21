@@ -93,6 +93,15 @@ function AgentStatus({ agent }: { agent: AgentEntry }) {
       </span>
     );
   }
+  if (agent.kind === 'endpoint') {
+    const iface = agent.customInterfaces[0];
+    return (
+      <span className="status">
+        <span className="dot" aria-hidden="true" />
+        No card{iface && ` · ${iface.protocolBinding} ${iface.protocolVersion}`}
+      </span>
+    );
+  }
   const payload = agent.result?.payload;
   if (agent.status === 'failed' || !payload) {
     return (
