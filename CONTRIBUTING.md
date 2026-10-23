@@ -29,18 +29,12 @@ Here are some additional things to keep in mind during the process:
 
 ## Testing
 
-Run all tests:
+Run the Go tests and [golangci-lint](https://golangci-lint.run/) v2 from the repository root, and the UI checks in `ui/` (after `npm install` there):
 
 ```sh
-bash scripts/test.sh
+go test ./...
+golangci-lint run
+cd ui && npm run lint && npm run typecheck && npm test
 ```
 
-Or run backend and frontend tests separately:
-
-```sh
-# Backend
-uv run pytest backend/tests/
-
-# Frontend
-cd frontend && npm test
-```
+A UI change needs `ui/dist` rebuilt with `npm run build` in `ui/` and committed with it; CI checks that it's up to date. The Development section of the README has the rest.

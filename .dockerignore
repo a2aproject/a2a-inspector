@@ -1,84 +1,61 @@
-# Git
+# Git and GitHub
 .git
 .gitignore
+.github
 
-# IDE / Editor files
-.vscode/
-.idea/
-*.swp
-*~
-
-# Python specific
-__pycache__/
-*.pyc
-.venv/
-venv/
-*.egg-info/
-dist/
-build/
-.pytest_cache/
-.mypy_cache/
-
-# Node / Frontend specific
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-frontend/dist/
-frontend/build/
-frontend/out/
-
-# Docker specific
+# Docker
 Dockerfile
 .dockerignore
 
-# Logs and temporary files
-*.log
-tmp/
-temp/
+# Docs and license
+**/*.md
+LICENSE
 
-# Environment files
-.env
-.env.*
+# Build output; the image builds its own
+ui/dist
+/a2a-inspector
 
-# Local database files
-*.sqlite
-*.db
+# Node
+**/node_modules
+**/npm-debug.log*
+**/.npm
+**/.eslintcache
+**/*.tsbuildinfo
+**/coverage
+
+# Tests
+**/*_test.go
+**/testdata
+ui/src/**/*.test.ts
+ui/src/**/*.test.tsx
+ui/src/test
+
+# Tooling the image build doesn't use
+.golangci.yml
+.pre-commit-config.yaml
+scripts
+ui/scripts
+ui/eslint.config.js
+
+# Editors and IDEs
+.vscode
+.idea
+**/*.swp
+**/*~
 
 # OS generated files
-.DS_Store
-.DS_Store?
-._*
+**/.DS_Store
+**/._*
+**/Thumbs.db
+**/ehthumbs.db
 .Spotlight-V100
 .Trashes
-ehthumbs.db
-Thumbs.db
 
-# Logs
-logs
+# Logs and temporary files
+**/*.log
+tmp
+temp
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-
-# Dependency directories
-jspm_packages/
-
-# Build outputs
-build/
-dist/
-
-# Cache
-.npm
-.eslintcache
-
-# Environment variables
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Local secrets
+**/.env
+**/.env.*
