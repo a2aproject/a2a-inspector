@@ -69,6 +69,7 @@ describe('settings', () => {
 
   it('writes raw templates in each wire format', () => {
     expect(JSON.parse(rawTemplate(iface('JSONRPC', '0.3'), 'c'))).toMatchObject({ kind: 'message', role: 'user', contextId: 'c' });
+    expect(JSON.parse(rawTemplate(iface('JSONRPC', '1.0'), 'c', 't'))).toMatchObject({ contextId: 'c', taskId: 't' });
     expect(JSON.parse(rawTemplate(iface('GRPC', '0.3')))).toMatchObject({ role: 'ROLE_USER', content: [{ text: 'Hello' }] });
     expect(JSON.parse(rawTemplate(iface('HTTP+JSON', '1.0')))).toMatchObject({ role: 'ROLE_USER', parts: [{ text: 'Hello' }] });
   });

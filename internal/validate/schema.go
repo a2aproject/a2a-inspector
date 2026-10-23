@@ -54,7 +54,8 @@ func v10Schema(message string) *jsonschema.Schema {
 	return schemas().get(v10SchemaURL + "#/$defs/" + message)
 }
 
-// v03Schema returns a definition of the v0.3 schema, for example "Task".
+// v03Schema returns a definition of the v0.3 schema, for example "Task", or a
+// part of one, such as "GetTaskSuccessResponse/properties/result".
 func v03Schema(definition string) *jsonschema.Schema {
 	return schemas().get(v03SchemaURL + "#/definitions/" + definition)
 }
@@ -174,11 +175,16 @@ func (e schemaError) message() string {
 	return strings.ToUpper(msg[:1]) + msg[1:] + "."
 }
 
-// checkV03Card validates a card against the v0.3 JSON Schema.
-func checkV03Card(doc any) []Finding {
+// schemaFindings validates doc against a schema and returns the findings.
+func schemaFindings(s *jsonschema.Schema, doc any) []Finding {
 	var out []Finding
-	for _, e := range schemaErrors(v03Schema("AgentCard"), doc) {
+	for _, e := range schemaErrors(s, doc) {
 		out = append(out, e.findings()...)
 	}
 	return out
+}
+
+// checkV03Card validates a card against the v0.3 JSON Schema.
+func checkV03Card(doc any) []Finding {
+	return schemaFindings(v03Schema("AgentCard"), doc)
 }

@@ -306,3 +306,90 @@ func TestCloseEndsStreams(t *testing.T) {
 		t.Fatal("the stream didn't end when the server closed")
 	}
 }
+
+func TestTaskRefOf(t *testing.T) {
+	tests := []struct {
+		name, raw string
+		want      taskRef
+	}{
+		{"v1.0 wrapped task", `{"task":{"id":"t","contextId":"c","status":{"state":"TASK_STATE_INPUT_REQUIRED"}}}`, taskRef{"t", "c", "input-required"}},
+		{"v1.0 status update", `{"statusUpdate":{"taskId":"t","contextId":"c","status":{"state":"TASK_STATE_AUTH_REQUIRED"}}}`, taskRef{"t", "c", "auth-required"}},
+		{"v1.0 message", `{"message":{"messageId":"m","taskId":"t","contextId":"c"}}`, taskRef{"t", "c", ""}},
+		{"bare task", `{"id":"t","contextId":"c","status":{"state":"TASK_STATE_COMPLETED"}}`, taskRef{"t", "c", "completed"}},
+		{"v0.3 task", `{"kind":"task","id":"t","contextId":"c","status":{"state":"input-required"}}`, taskRef{"t", "c", "input-required"}},
+		{"v0.3 status update", `{"kind":"status-update","taskId":"t","contextId":"c","status":{"state":"canceled"}}`, taskRef{"t", "c", "canceled"}},
+		{"v0.3 message", `{"kind":"message","messageId":"m","contextId":"c"}`, taskRef{"", "c", ""}},
+		{"v0.3 proto message", `{"msg":{"messageId":"m","taskId":"t","contextId":"c"}}`, taskRef{"t", "c", ""}},
+		{"v0.3 proto snake case", `{"status_update":{"task_id":"t","context_id":"c","status":{"state":"TASK_STATE_WORKING"}}}`, taskRef{"t", "c", "working"}},
+		{"not an object", `[]`, taskRef{}},
+	}
+	for _, tc := range tests {
+		if got := taskRefOf(json.RawMessage(tc.raw)); got != tc.want {
+			t.Errorf("%s: taskRefOf() = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestObserve(t *testing.T) {
+	c := &connection{}
+	open := func() string {
+		_, o := c.conversation()
+		if o == nil {
+			return ""
+		}
+		return o.ID + " " + o.State
+	}
+	// A reply to the conversation's own message sets the context and the open task.
+	c.observe(json.RawMessage(`{"kind":"task","id":"t-1","contextId":"c-1","status":{"state":"input-required"}}`), true)
+	if ctx, _ := c.conversation(); ctx != "c-1" || open() != "t-1 input-required" {
+		t.Fatalf("conversation = %q, %q", ctx, open())
+	}
+	// A task in another context doesn't replace it, unless it's a reply.
+	c.observe(json.RawMessage(`{"task":{"id":"t-2","contextId":"c-2","status":{"state":"TASK_STATE_INPUT_REQUIRED"}}}`), false)
+	if ctx, _ := c.conversation(); ctx != "c-1" || open() != "t-1 input-required" {
+		t.Errorf("after a foreign task: %q, %q", ctx, open())
+	}
+	// Another task of the conversation that waits for the user takes over.
+	c.observe(json.RawMessage(`{"statusUpdate":{"taskId":"t-3","contextId":"c-1","status":{"state":"TASK_STATE_AUTH_REQUIRED"}}}`), false)
+	if open() != "t-3 auth-required" {
+		t.Errorf("open task = %q, want t-3", open())
+	}
+	// Other tasks moving on leave it open; the open task moving on closes it.
+	c.observe(json.RawMessage(`{"id":"t-1","contextId":"c-1","status":{"state":"TASK_STATE_COMPLETED"}}`), false)
+	if open() != "t-3 auth-required" {
+		t.Errorf("open task = %q after another task completed", open())
+	}
+	c.observe(json.RawMessage(`{"status_update":{"task_id":"t-3","context_id":"c-1","status":{"state":"TASK_STATE_WORKING"}}}`), false)
+	if open() != "" {
+		t.Errorf("open task = %q after it moved on", open())
+	}
+}
+
+func TestNewContextClearsConversation(t *testing.T) {
+	var gotTaskID, gotContextID string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Params struct {
+				Message struct{ TaskID, ContextID string }
+			}
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotTaskID, gotContextID = req.Params.Message.TaskID, req.Params.Message.ContextID
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"message":{"messageId":"r","role":"ROLE_AGENT","parts":[{"text":"ok"}]}}}`)
+	}))
+	defer agent.Close()
+	s := newServer(t, Options{})
+	conn := s.connect(t, `{"interface":{"url":"`+agent.URL+`","protocolBinding":"JSONRPC","protocolVersion":"1.0"},"contextId":"c-1","openTask":{"id":"t-1","state":"input-required"}}`)
+	if conn.ContextID != "c-1" || conn.OpenTask == nil || conn.OpenTask.ID != "t-1" {
+		t.Fatalf("connection = %+v", conn)
+	}
+	s.send(t, conn.ID, `{"compose":{"text":"continue"}}`)
+	if gotTaskID != "t-1" || gotContextID != "c-1" {
+		t.Errorf("the agent got task %q in context %q, want t-1 in c-1", gotTaskID, gotContextID)
+	}
+	res := s.send(t, conn.ID, `{"compose":{"text":"new"},"options":{"newContext":true}}`)
+	if gotTaskID != "" || gotContextID != "" || res.OpenTask != nil || res.ContextID != "" {
+		t.Errorf("the agent got task %q in context %q; result has %q and %+v", gotTaskID, gotContextID, res.ContextID, res.OpenTask)
+	}
+}

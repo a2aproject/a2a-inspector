@@ -23,4 +23,23 @@ describe('api', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<html>', { status: 502, statusText: 'Bad Gateway' }));
     await expect(api.config()).rejects.toMatchObject({ status: 502, message: '502 Bad Gateway' });
   });
+
+  it('encodes task and config IDs and leaves out empty query parameters', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200 }));
+    await api.getTask('conn 1', 'a/b?c', 5);
+    await api.getTask('c', 't');
+    await api.listTasks('c', { contextId: 'ctx', status: '', pageSize: 10 });
+    await api.cancelTask('c', 't/1');
+    await api.deletePushConfig('c', 't', 'cfg#1');
+    await api.updateConfig({ webhookBaseUrl: '' });
+    expect(fetch.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)).toEqual([
+      'GET /api/connections/conn%201/tasks/a%2Fb%3Fc?historyLength=5',
+      'GET /api/connections/c/tasks/t',
+      'GET /api/connections/c/tasks?contextId=ctx&pageSize=10',
+      'POST /api/connections/c/tasks/t%2F1:cancel',
+      'DELETE /api/connections/c/tasks/t/pushNotificationConfigs/cfg%231',
+      'PATCH /api/config',
+    ]);
+    expect(fetch.mock.calls[5]?.[1]?.body).toBe('{"webhookBaseUrl":""}');
+  });
 });

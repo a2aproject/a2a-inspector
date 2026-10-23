@@ -6,7 +6,7 @@ import (
 	"github.com/a2aproject/a2a-inspector/internal/agents"
 )
 
-// Field hints for schema and required-field findings, following a2a-editor's.
+// Field hints for schema and required-field findings.
 var (
 	commonHints = map[string]string{
 		"name":                  `A string, for example "name": "My Agent".`,

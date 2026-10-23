@@ -30,6 +30,16 @@ var v03Fields = map[string][]string{
 	"lf.a2a.v1.SecurityScheme":    {"type", "description", "in", "name", "scheme", "bearerFormat", "flows", "openIdConnectUrl", "oauth2MetadataUrl"},
 }
 
+// zeroValid lists REQUIRED fields whose zero value is a valid answer, such as
+// the empty page token of the last page. ProtoJSON leaves zero values out, so
+// these can be missing on the wire.
+var zeroValid = map[protoreflect.FullName]bool{
+	"lf.a2a.v1.ListTasksResponse.tasks":           true,
+	"lf.a2a.v1.ListTasksResponse.next_page_token": true,
+	"lf.a2a.v1.ListTasksResponse.page_size":       true,
+	"lf.a2a.v1.ListTasksResponse.total_size":      true,
+}
+
 // checkV10Card validates a card as a v1.0 AgentCard. withV03 is set when the
 // card also carries v0.3 fields, which are then listed instead of reported
 // as unknown.
@@ -208,7 +218,7 @@ func checkMessage(md protoreflect.MessageDescriptor, v any, path string, v03 boo
 			}
 		}
 		fieldPath := joinPath(path, key)
-		if isRequired(fd) {
+		if isRequired(fd) && !zeroValid[fd.FullName()] {
 			switch {
 			case !found || val == nil:
 				*out = append(*out, Finding{

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,14 @@ import (
 // sendTimeout bounds a non-streaming call; streams last until the UI stops them.
 const sendTimeout = 5 * time.Minute
 
+// Payload kinds the server reads itself instead of with validate.Payload.
+const (
+	// extendedCard is the result of GetExtendedAgentCard, checked as a card.
+	extendedCard validate.PayloadKind = "AgentCard"
+	// empty is the result of DeleteTaskPushNotificationConfig.
+	empty validate.PayloadKind = "Empty"
+)
+
 type sendRequest struct {
 	Compose *agents.Compose `json:"compose,omitempty"`
 	// RawMessage replaces Compose with a message written in the connection's
@@ -29,8 +39,15 @@ type sendRequest struct {
 	RawMessage *string `json:"rawMessage,omitempty"`
 	Options    struct {
 		// NewContext starts a new conversation instead of continuing the
-		// connection's context.
-		NewContext          bool     `json:"newContext,omitempty"`
+		// connection's context and open task.
+		NewContext bool `json:"newContext,omitempty"`
+		// NewTask starts a new task in the conversation instead of
+		// continuing the open task.
+		NewTask bool `json:"newTask,omitempty"`
+		// PushNotifications asks the agent to send the task's updates to a
+		// new webhook of the inspector, unless the task it continues already
+		// notifies one.
+		PushNotifications   bool     `json:"pushNotifications,omitempty"`
 		ReturnImmediately   bool     `json:"returnImmediately,omitempty"`
 		HistoryLength       *int     `json:"historyLength,omitempty"`
 		AcceptedOutputModes []string `json:"acceptedOutputModes,omitempty"`
@@ -42,8 +59,22 @@ type sendRequest struct {
 type agentResult struct {
 	Payload *agentPayload `json:"payload,omitempty"`
 	Call    call          `json:"call"`
-	// ContextID is the conversation the connection continues after this result.
-	ContextID string `json:"contextId,omitempty"`
+	// ContextID and OpenTask are what the connection's next message
+	// continues after this result: the conversation and the task waiting
+	// for the user.
+	ContextID string     `json:"contextId,omitempty"`
+	OpenTask  *taskState `json:"openTask,omitempty"`
+	// Webhook is the inspector's receiver that the call's push notification
+	// config points to, or with Existing the one the task already notifies.
+	Webhook *webhookView `json:"webhook,omitempty"`
+}
+
+// sendCall is a send request ready to go to the agent.
+type sendCall struct {
+	conn    *connection
+	req     *a2a.SendMessageRequest
+	tc      *traffic.Call
+	webhook *webhookView
 }
 
 func (s *Server) buildSend(conn *connection, req sendRequest) (*a2a.SendMessageRequest, []byte, error) {
@@ -64,8 +95,11 @@ func (s *Server) buildSend(conn *connection, req sendRequest) (*a2a.SendMessageR
 		if msg, err = req.Compose.Message(); err != nil {
 			return nil, nil, err
 		}
-		if !req.Options.NewContext {
-			msg.ContextID = conn.currentContextID()
+		if contextID, open := conn.conversation(); !req.Options.NewContext {
+			msg.ContextID = contextID
+			if open != nil && !req.Options.NewTask {
+				msg.TaskID = a2a.TaskID(open.ID)
+			}
 		}
 	default:
 		return nil, nil, errors.New(`"compose" or "rawMessage" is required`)
@@ -83,35 +117,48 @@ func (s *Server) buildSend(conn *connection, req sendRequest) (*a2a.SendMessageR
 }
 
 // prepareSend decodes and builds a send request, or writes an error response.
-func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*connection, *a2a.SendMessageRequest, *traffic.Call, bool) {
+func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall, bool) {
 	conn, ok := s.connection(w, r)
 	if !ok {
-		return nil, nil, nil, false
+		return nil, false
 	}
 	var req sendRequest
 	if !decodeRequest(w, r, &req) {
-		return nil, nil, nil, false
+		return nil, false
 	}
 	sendReq, raw, err := s.buildSend(conn, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return nil, nil, nil, false
+		return nil, false
 	}
 	_, secrets, err := conn.params()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return nil, nil, nil, false
+		return nil, false
 	}
-	if req.Options.NewContext {
-		conn.mu.Lock()
-		conn.contextID = ""
-		conn.mu.Unlock()
+	sc := &sendCall{conn: conn, req: sendReq, tc: &traffic.Call{ConnectionID: conn.view.ID, Secrets: secrets, MessageOverride: raw}}
+	if req.Options.PushNotifications {
+		base := s.webhookBaseURL()
+		if view, ok := s.hooks.forTask(conn.view.ID, string(sendReq.Message.TaskID), base); ok {
+			// A second config would make the agent notify twice.
+			sc.webhook = &view
+		} else {
+			wh, view := s.hooks.create(conn, "", base)
+			if sendReq.Config == nil {
+				sendReq.Config = &a2a.SendMessageConfig{}
+			}
+			sendReq.Config.PushConfig = &a2a.PushConfig{URL: view.URL, Token: wh.token}
+			sc.webhook = &view
+		}
 	}
-	return conn, sendReq, &traffic.Call{ConnectionID: conn.view.ID, Secrets: secrets, MessageOverride: raw}, true
+	if req.Options.NewContext || req.Options.NewTask {
+		conn.reset(req.Options.NewContext)
+	}
+	return sc, true
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
-	conn, req, tc, ok := s.prepareSend(w, r)
+	sc, ok := s.prepareSend(w, r)
 	if !ok {
 		return
 	}
@@ -120,18 +167,46 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(callCtx, sendTimeout)
 	defer cancel()
 	start := time.Now()
-	decoded, err := conn.client.SendMessage(traffic.WithCall(ctx, tc), req)
-	res := s.unaryResult(conn, tc, start, validate.SendMessageResponse, decoded, err)
-	conn.setContextID(contextIDOf(res.Payload))
-	res.ContextID = conn.currentContextID()
+	decoded, err := sc.conn.client.SendMessage(traffic.WithCall(ctx, sc.tc), sc.req)
+	res := s.unaryResult(sc.conn, sc.tc, start, validate.SendMessageResponse, decoded, err)
+	sc.conn.settle(&res, true)
+	s.hooks.bind(sc.webhook, res)
+	res.Webhook = s.dropWebhook(ctx, sc.webhook, res)
 	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	conn, req, tc, ok := s.prepareSend(w, r)
+	sc, ok := s.prepareSend(w, r)
 	if !ok {
 		return
 	}
+	s.streamEvents(w, r, streamCall{
+		conn:    sc.conn,
+		tc:      sc.tc,
+		op:      validate.SendStreamingMessage,
+		own:     true,
+		webhook: sc.webhook,
+		run: func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+			return sc.conn.client.SendStreamingMessage(ctx, sc.req)
+		},
+	})
+}
+
+// streamCall is a streaming call to an agent.
+type streamCall struct {
+	conn *connection
+	tc   *traffic.Call
+	// op is checked against the card's capabilities.
+	op validate.Operation
+	// own is set for replies to the conversation's own messages.
+	own     bool
+	webhook *webhookView
+	run     func(ctx context.Context) iter.Seq2[a2a.Event, error]
+}
+
+// streamEvents answers with the events of a streaming call as server-sent
+// events, one agentResult each, read from the wire as they arrive.
+func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamCall) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming isn't supported by this server.")
@@ -143,11 +218,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	conn, tc := sc.conn, sc.tc
 	binding, version := conn.binding()
-	var opFindings []validate.Finding
-	if conn.cardDoc != nil {
-		opFindings = validate.OperationFindings(conn.cardDoc, version, validate.SendStreamingMessage)
-	}
+	opFindings := s.operationFindings(conn, sc.op)
+	ctx, stop := s.callContext(r)
+	defer stop()
 	var mu sync.Mutex
 	emitted, failed := 0, false
 	emit := func(res agentResult) {
@@ -155,9 +230,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		defer mu.Unlock()
 		if emitted == 0 {
 			res.Call.Findings = append(opFindings, res.Call.Findings...)
+			// A rejection as the first result ends the stream.
+			res.Webhook = s.dropWebhook(ctx, sc.webhook, res)
 		}
-		conn.setContextID(contextIDOf(res.Payload))
-		res.ContextID = conn.currentContextID()
+		conn.settle(&res, sc.own)
+		s.hooks.bind(sc.webhook, res)
 		emitted++
 		failed = failed || res.Call.Error != nil
 		data, _ := json.Marshal(res)
@@ -186,17 +263,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	ctx, stop := s.callContext(r)
-	defer stop()
 	var streamErr error
-	for event, err := range conn.client.SendStreamingMessage(traffic.WithCall(ctx, tc), req) {
+	for event, err := range sc.run(traffic.WithCall(ctx, tc)) {
 		if err != nil {
 			streamErr = err
 			break
 		}
 		if tc.LastEntryID() == "" {
-			// A transport the inspector can't record, such as one an
-			// internal build adds: show what a2a-go decoded.
+			// A transport the inspector can't record: show what a2a-go
+			// decoded.
 			emit(s.decodedResult(start, binding, validate.StreamResponse, a2a.StreamResponse{Event: event}))
 		}
 	}
@@ -220,6 +295,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case streamErr != nil:
 		res.Call.Error = errorFrom(streamErr)
+		// Without a traffic entry, the request never left; with one, the
+		// agent started a stream.
+		res.Call.Error.rejected = !ok
 		if ok && entry.Error != "" {
 			res.Call.Error.Message = entry.Error + " (" + res.Call.Error.Message + ")"
 		}
@@ -227,6 +305,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		res.Call.Error = &callError{Message: "The stream ended without any events."}
 	}
 	emit(res)
+}
+
+// operationFindings reports what the card and the protocol version say
+// against an operation. Without a card, only the version counts.
+func (s *Server) operationFindings(conn *connection, op validate.Operation) []validate.Finding {
+	if op == "" {
+		return nil
+	}
+	_, version := conn.binding()
+	findings := validate.OperationFindings(conn.cardDoc, version, op)
+	if conn.cardDoc == nil {
+		findings = slices.DeleteFunc(findings, func(f validate.Finding) bool { return f.Rule == "capability" })
+	}
+	return findings
 }
 
 // unaryResult builds the result of a call from its last traffic entry: the
@@ -238,7 +330,10 @@ func (s *Server) unaryResult(conn *connection, tc *traffic.Call, start time.Time
 	entry, ok := s.traffic.Get(res.Call.TrafficEntryID)
 	switch {
 	case !ok && err != nil:
+		// a2a-go failed before sending, or on a transport the inspector
+		// can't record.
 		res.Call.Error = errorFrom(err)
+		res.Call.Error.rejected = true
 	case !ok && decoded != nil:
 		if r, isResult := decoded.(a2a.SendMessageResult); isResult {
 			decoded = a2a.StreamResponse{Event: r}
@@ -250,6 +345,10 @@ func (s *Server) unaryResult(conn *connection, tc *traffic.Call, start time.Time
 		res.Payload, res.Call.Error = s.grpcPayload(entry, version, binding, kind, err)
 	default:
 		res.Payload, res.Call.Error = s.httpPayload(entry, version, binding, kind, err)
+		if kind == empty && res.Call.Error == nil && binding == agents.BindingJSONRPC {
+			// A delete has no payload to carry the envelope's findings.
+			res.Call.Findings = validate.JSONRPCEnvelope([]byte(entry.HTTP.ResponseBody), jsonrpcRequestID(entry.HTTP.RequestBody))
+		}
 		if res.Payload != nil && kind == validate.StreamResponse {
 			res.Payload.Validation = validate.Merge(res.Payload.Validation, validate.Finding{
 				Severity: validate.SeverityError,
@@ -258,7 +357,7 @@ func (s *Server) unaryResult(conn *connection, tc *traffic.Call, start time.Time
 			})
 		}
 	}
-	if res.Payload != nil && err != nil {
+	if res.Call.Error == nil && err != nil {
 		res.Call.Findings = append(res.Call.Findings, validate.Finding{
 			Severity: validate.SeverityWarning,
 			Rule:     "a2a-go",
@@ -270,6 +369,9 @@ func (s *Server) unaryResult(conn *connection, tc *traffic.Call, start time.Time
 
 func (s *Server) decodedResult(start time.Time, binding string, kind validate.PayloadKind, decoded any) agentResult {
 	res := agentResult{Call: call{LatencyMs: time.Since(start).Milliseconds()}}
+	if kind == empty {
+		return res
+	}
 	raw, err := json.Marshal(decoded)
 	if err != nil {
 		res.Call.Error = &callError{Message: "Couldn't encode the response: " + err.Error()}
@@ -286,6 +388,11 @@ func (s *Server) decodedResult(start time.Time, binding string, kind validate.Pa
 }
 
 func (s *Server) payload(raw []byte, version, binding string, kind validate.PayloadKind) *agentPayload {
+	if kind == extendedCard {
+		// A card has its own format, which can differ from the interface's.
+		p, _ := s.describeCard(raw, validate.CardInput{}, "")
+		return p
+	}
 	return &agentPayload{
 		ProtocolVersion: version,
 		Raw:             json.RawMessage(raw),
@@ -296,7 +403,7 @@ func (s *Server) payload(raw []byte, version, binding string, kind validate.Payl
 func (s *Server) httpPayload(entry *traffic.Entry, version, binding string, kind validate.PayloadKind, err error) (*agentPayload, *callError) {
 	h := entry.HTTP
 	if h.Status == 0 {
-		return nil, &callError{Message: cmp.Or(entry.Error, errMessage(err), "No response.")}
+		return nil, &callError{Message: cmp.Or(entry.Error, errMessage(err), "No response."), rejected: true}
 	}
 	body := []byte(h.ResponseBody)
 	if h.Truncated {
@@ -304,6 +411,9 @@ func (s *Server) httpPayload(entry *traffic.Entry, version, binding string, kind
 	}
 	if h.Status < 200 || h.Status > 299 {
 		return nil, httpError(h.Status, body, err)
+	}
+	if kind == empty {
+		return nil, nil
 	}
 	var findings []validate.Finding
 	if mediaType, _, perr := mime.ParseMediaType(headerValue(h.ResponseHeaders, "Content-Type")); perr != nil || mediaType != "application/json" {
@@ -343,6 +453,9 @@ func (s *Server) jsonrpcPayload(body []byte, version, binding string, kind valid
 	if env.Result == nil {
 		return nil, &callError{Message: "The JSON-RPC response has neither a result nor an error.", Raw: json.RawMessage(body)}
 	}
+	if kind == empty {
+		return nil, nil
+	}
 	p := s.payload(env.Result, version, binding, kind)
 	p.Validation = validate.Merge(p.Validation, validate.JSONRPCEnvelope(body, requestID)...)
 	return p, nil
@@ -370,12 +483,15 @@ func (s *Server) eventPayload(data []byte, binding, version string, requestID js
 func (s *Server) grpcPayload(entry *traffic.Entry, version, binding string, kind validate.PayloadKind, err error) (*agentPayload, *callError) {
 	g := entry.GRPC
 	if g.StatusCode != codes.OK.String() {
-		ce := &callError{A2AError: a2aErrorName(err), Message: cmp.Or(g.StatusMessage, entry.Error, errMessage(err))}
+		ce := &callError{A2AError: a2aErrorName(err), Message: cmp.Or(g.StatusMessage, entry.Error, errMessage(err)), rejected: true}
 		if c, ok := grpcCode(g.StatusCode); ok {
 			ce.Code = int(c)
 			ce.Raw = map[string]any{"code": g.StatusCode, "message": g.StatusMessage, "trailers": g.Trailers}
 		}
 		return nil, ce
+	}
+	if kind == empty {
+		return nil, nil
 	}
 	for i := len(g.Messages) - 1; i >= 0; i-- {
 		if !g.Messages[i].FromClient {
@@ -413,24 +529,61 @@ func jsonrpcRequestID(body string) json.RawMessage {
 	return req.ID
 }
 
-// contextIDOf finds the contextId of a task, message or event in any of the
-// payload forms: top level (v0.3 JSON-RPC) or one level down (ProtoJSON).
-func contextIDOf(p *agentPayload) string {
-	if p == nil {
-		return ""
-	}
+// taskRef is what a payload says about a task.
+type taskRef struct {
+	ID, ContextID string
+	// State is lower case with dashes, as v0.3 JSON-RPC writes it: "input-required".
+	State string
+}
+
+// eventWrappers name the member ProtoJSON wraps each payload in, with the
+// v0.3 proto's names, and its kind.
+var eventWrappers = []struct{ name, kind string }{
+	{"task", "task"},
+	{"message", "message"},
+	{"msg", "message"},
+	{"statusUpdate", "status-update"},
+	{"status_update", "status-update"},
+	{"artifactUpdate", "artifact-update"},
+	{"artifact_update", "artifact-update"},
+}
+
+// taskRefOf reads a task, message or event in any of the payload forms:
+// tagged with "kind" (v0.3 JSON-RPC) or wrapped in a member named after its
+// type (ProtoJSON). A bare task, as GetTask returns it, has no wrapper.
+func taskRefOf(raw json.RawMessage) taskRef {
 	var obj map[string]any
-	if json.Unmarshal(p.Raw, &obj) != nil {
-		return ""
+	if json.Unmarshal(raw, &obj) != nil {
+		return taskRef{}
 	}
-	if id, ok := obj["contextId"].(string); ok {
-		return id
-	}
-	for _, v := range obj {
-		if inner, ok := v.(map[string]any); ok {
-			if id, ok := inner["contextId"].(string); ok {
-				return id
+	kind, _ := obj["kind"].(string)
+	if kind == "" {
+		kind = "task"
+		for _, w := range eventWrappers {
+			if inner, ok := obj[w.name].(map[string]any); ok {
+				obj, kind = inner, w.kind
+				break
 			}
+		}
+	}
+	ref := taskRef{ContextID: stringField(obj, "contextId", "context_id")}
+	if kind == "task" {
+		ref.ID = stringField(obj, "id")
+	} else {
+		ref.ID = stringField(obj, "taskId", "task_id")
+	}
+	if status, ok := obj["status"].(map[string]any); ok {
+		state, _ := status["state"].(string)
+		ref.State = strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(state, "TASK_STATE_")), "_", "-")
+	}
+	return ref
+}
+
+// stringField returns the first of the named members that's a string.
+func stringField(obj map[string]any, names ...string) string {
+	for _, n := range names {
+		if v, ok := obj[n].(string); ok {
+			return v
 		}
 	}
 	return ""

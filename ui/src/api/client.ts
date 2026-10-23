@@ -7,6 +7,8 @@ import type {
   Connection,
   ConnectionRequest,
   HeaderInput,
+  ListTasksQuery,
+  PushConfigRequest,
   SendRequest,
 } from './types';
 
@@ -78,17 +80,49 @@ export async function readEvents(path: string, init: RequestInit, onEvent: (even
 
 const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
 
+const conn = (id: string) => `/api/connections/${encodeURIComponent(id)}`;
+const task = (id: string, taskId: string) => `${conn(id)}/tasks/${encodeURIComponent(taskId)}`;
+const pushConfigs = (id: string, taskId: string) => `${task(id, taskId)}/pushNotificationConfigs`;
+
+/** "?a=1&b=2" for the parameters that are set, or "". */
+function query(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+/** Reads a stream of AgentResults, one per event. */
+const results = (path: string, init: RequestInit, onResult: (result: AgentResult) => void) =>
+  readEvents(path, init, (event) => {
+    onResult(JSON.parse(event.data) as AgentResult);
+  });
+
 export const api = {
   config: () => request<Config>('/api/config'),
   resolveCard: (url: string, credentials: { auth?: AuthInput; headers?: HeaderInput[] } = {}) =>
     request<CardResolveResponse>('/api/card:resolve', post({ url, ...credentials })),
+  /** Sets the webhook base URL for this run; an empty one resets it to the default. */
+  updateConfig: (change: { webhookBaseUrl: string }) => request<Config>('/api/config', { method: 'PATCH', body: JSON.stringify(change) }),
   connect: (req: ConnectionRequest) => request<Connection>('/api/connections', post(req)),
-  disconnect: (id: string) => request<void>(`/api/connections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  send: (id: string, req: SendRequest, signal?: AbortSignal) =>
-    request<AgentResult>(`/api/connections/${encodeURIComponent(id)}/messages:send`, { ...post(req), signal }),
+  disconnect: (id: string) => request<void>(conn(id), { method: 'DELETE' }),
+  send: (id: string, req: SendRequest, signal?: AbortSignal) => request<AgentResult>(`${conn(id)}/messages:send`, { ...post(req), signal }),
   /** Streams a message's events; resolves when the stream ends. */
   stream: (id: string, req: SendRequest, onResult: (result: AgentResult) => void, signal?: AbortSignal) =>
-    readEvents(`/api/connections/${encodeURIComponent(id)}/messages:stream`, { ...post(req), signal }, (event) => {
-      onResult(JSON.parse(event.data) as AgentResult);
-    }),
+    results(`${conn(id)}/messages:stream`, { ...post(req), signal }, onResult),
+  getTask: (id: string, taskId: string, historyLength?: number) => request<AgentResult>(`${task(id, taskId)}${query({ historyLength })}`),
+  listTasks: (id: string, q: ListTasksQuery) => request<AgentResult>(`${conn(id)}/tasks${query({ ...q })}`),
+  cancelTask: (id: string, taskId: string) => request<AgentResult>(`${task(id, taskId)}:cancel`, { method: 'POST' }),
+  /** Follows a task's events; resolves when the stream ends. */
+  subscribeTask: (id: string, taskId: string, onResult: (result: AgentResult) => void, signal?: AbortSignal) =>
+    results(`${task(id, taskId)}:subscribe`, { signal }, onResult),
+  createPushConfig: (id: string, taskId: string, req: PushConfigRequest) => request<AgentResult>(pushConfigs(id, taskId), post(req)),
+  listPushConfigs: (id: string, taskId: string) => request<AgentResult>(pushConfigs(id, taskId)),
+  getPushConfig: (id: string, taskId: string, configId: string) =>
+    request<AgentResult>(`${pushConfigs(id, taskId)}/${encodeURIComponent(configId)}`),
+  deletePushConfig: (id: string, taskId: string, configId: string) =>
+    request<AgentResult>(`${pushConfigs(id, taskId)}/${encodeURIComponent(configId)}`, { method: 'DELETE' }),
+  extendedCard: (id: string) => request<AgentResult>(`${conn(id)}/extendedAgentCard`),
 };

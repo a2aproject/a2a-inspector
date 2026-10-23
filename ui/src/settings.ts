@@ -121,10 +121,10 @@ export function preferredInterface(interfaces: AgentInterface[], prefs: Preferen
   return candidates[0]?.index ?? null;
 }
 
-/** A message to start from in raw mode, in the interface's own wire format. */
-export function rawTemplate(iface: AgentInterface | undefined, contextId?: string): string {
+/** A message to start from in raw mode, in the interface's own wire format, continuing the open task if any. */
+export function rawTemplate(iface: AgentInterface | undefined, contextId?: string, taskId?: string): string {
   const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : 'message-1';
-  const ctx = contextId ? { contextId } : {};
+  const ctx = { ...(contextId ? { contextId } : {}), ...(taskId ? { taskId } : {}) };
   let message: object;
   if (iface?.protocolVersion === '0.3' && iface.protocolBinding === 'JSONRPC') {
     message = { kind: 'message', messageId: id, role: 'user', parts: [{ kind: 'text', text: 'Hello' }], ...ctx };

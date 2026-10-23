@@ -33,10 +33,10 @@ const (
 	BindingGRPC     = "GRPC"
 )
 
-// NormalizeCardURL turns an agent card reference into the URL to fetch, with
-// the same rules as a2a-cli's --agent-card flag: a bare host gets http:// when
-// it's a loopback address and https:// otherwise, and a URL without a path
-// (or with "/") gets the well-known card path. Any other path is used as is.
+// NormalizeCardURL turns an agent card reference into the URL to fetch: a bare
+// host gets http:// when it's a loopback address and https:// otherwise, and
+// a URL without a path (or with "/") gets the well-known card path. Any other
+// path is used as is.
 // Local file paths aren't supported.
 func NormalizeCardURL(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)

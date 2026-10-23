@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { viewPayload } from './view';
+import { viewPayload, viewPushConfig, viewPushConfigs } from './view';
 
 describe('viewPayload', () => {
   it('reads v1.0 ProtoJSON', () => {
@@ -50,8 +50,35 @@ describe('viewPayload', () => {
     ]);
   });
 
+  it('reads bare tasks, as GetTask, CancelTask and ListTasks return them', () => {
+    const v1 = viewPayload({ id: 't', contextId: 'c', status: { state: 'TASK_STATE_INPUT_REQUIRED', message: { role: 'ROLE_AGENT', parts: [{ text: 'When?' }] } } }, '1.0', 'HTTP+JSON');
+    expect(v1).toMatchObject({ kind: 'task', taskId: 't', contextId: 'c', state: 'input-required', parts: [{ kind: 'text', text: 'When?' }] });
+    const v03 = viewPayload({ id: 't', context_id: 'c', status: { state: 'TASK_STATE_CANCELLED', update: {} }, artifacts: [{ parts: [{ text: 'x' }] }] }, '0.3', 'GRPC');
+    expect(v03).toMatchObject({ kind: 'task', taskId: 't', contextId: 'c', state: 'cancelled' });
+    expect(v03.artifacts[0]?.parts).toEqual([{ kind: 'text', text: 'x' }]);
+    expect(viewPayload({ kind: 'task', id: 't', contextId: 'c', status: { state: 'canceled' } }, '0.3', 'JSONRPC')).toMatchObject({ kind: 'task', taskId: 't', state: 'canceled' });
+    // A push config has an id but no status.
+    expect(viewPayload({ id: 'cfg', taskId: 't', url: 'https://x' }, '1.0', 'JSONRPC').kind).toBe('unknown');
+  });
+
   it('reports payloads it does not know', () => {
     expect(viewPayload({ surprise: 1 }, '1.0', 'JSONRPC').kind).toBe('unknown');
     expect(viewPayload('text', '0.3', 'JSONRPC').kind).toBe('unknown');
+  });
+});
+
+describe('viewPushConfig', () => {
+  it('reads configs and lists in every version', () => {
+    expect(viewPushConfig({ id: 'cfg-1', taskId: 't', url: 'https://hook', token: 'x' })).toEqual({ id: 'cfg-1', taskId: 't', url: 'https://hook' });
+    expect(viewPushConfig({ taskId: 't', pushNotificationConfig: { id: 'cfg-1', url: 'https://hook' } })).toEqual({ id: 'cfg-1', taskId: 't', url: 'https://hook' });
+    expect(viewPushConfig({ taskId: 't', pushNotificationConfig: { url: 'https://hook' } })).toEqual({ id: undefined, taskId: 't', url: 'https://hook' });
+    expect(viewPushConfig({ name: 'tasks/t/pushNotificationConfigs/cfg-1', push_notification_config: { url: 'https://hook' } })).toEqual({
+      id: 'cfg-1',
+      taskId: 't',
+      url: 'https://hook',
+    });
+    expect(viewPushConfigs({ configs: [{ id: 'a', url: 'u' }], nextPageToken: 'n' })).toEqual([{ id: 'a', taskId: undefined, url: 'u' }]);
+    expect(viewPushConfigs([{ taskId: 't', pushNotificationConfig: { id: 'b', url: 'u' } }]).map((c) => c.id)).toEqual(['b']);
+    expect(viewPushConfigs({})).toEqual([]);
   });
 });

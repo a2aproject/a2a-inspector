@@ -252,8 +252,11 @@ func TestConfig(t *testing.T) {
 	s := newServer(t, Options{AgentCardURL: "https://agent.example.com/.well-known/agent-card.json"})
 	w := s.do(request{target: "/api/config", cookie: true})
 	got := decodeBody[configResponse](t, w)
-	if got.Mode != "local" || got.AgentCardURL != "https://agent.example.com/.well-known/agent-card.json" || got.Features.Serve || got.Features.Webhooks {
+	if got.Mode != "local" || got.AgentCardURL != "https://agent.example.com/.well-known/agent-card.json" || got.Features.Serve || !got.Features.Webhooks {
 		t.Errorf("config = %+v", got)
+	}
+	if got.WebhookBaseURL != "http://127.0.0.1:8080" || got.DefaultWebhookBaseURL != "http://127.0.0.1:8080" {
+		t.Errorf("webhook base URLs = %q, %q", got.WebhookBaseURL, got.DefaultWebhookBaseURL)
 	}
 	if w.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", w.Header().Get("Cache-Control"))

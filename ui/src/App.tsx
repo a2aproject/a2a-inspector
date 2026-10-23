@@ -1,17 +1,22 @@
 import { type CSSProperties, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { type AgentEntry, agentsReducer, countFindings, findAgent, initialAgentsState, selectedInterfaceOf } from './agents';
+import { type AgentEntry, agentsReducer, countFindings, findAgent, initialAgentsState, selectedInterfaceOf, type TaskActivity } from './agents';
+import { viewPayload, viewPushConfig, viewPushConfigs } from './a2a/view';
 import { ApiError, api } from './api/client';
-import type { AgentInterface, AgentResult, Config, Connection, ConnectionRequest, SendRequest } from './api/types';
+import type { AgentInterface, AgentResult, Config, Connection, ConnectionRequest, ListTasksQuery, SendRequest } from './api/types';
+import { asObject, asObjects } from './card';
 import { AgentList } from './components/AgentList';
 import { CardView } from './components/CardView';
 import { ChatPanel, type SentEcho } from './components/ChatPanel';
 import { ResizeHandle } from './components/ResizeHandle';
 import { Tabs } from './components/Tabs';
+import { type TaskOperation, TasksPanel } from './components/TasksPanel';
 import { ThemeToggle } from './components/ThemeToggle';
 import { TrafficPanel } from './components/TrafficPanel';
 import { ValidationPanel } from './components/ValidationPanel';
 import { type Layout, type Side, useLayout } from './layout';
 import { type ConnectionSettings, defaultSettings, settingsAfterConnect, settingsFromHeaders, settingsRequest } from './settings';
+import { useNotifications, webhookWarning } from './notifications';
+import { taskRef } from './tasks';
 import { useTraffic } from './traffic';
 
 const panelIds: Record<Side, string> = { left: 'agents-panel', right: 'details-panel' };
@@ -48,12 +53,33 @@ function message(err: unknown): string {
 let nextItem = 1;
 const itemId = () => `item-${nextItem++}`;
 
+/** Labels of task operations in the activity list. */
+const operationLabels: Record<Exclude<TaskOperation['type'], 'stop'>, string> = {
+  get: 'Get task',
+  cancel: 'Cancel task',
+  subscribe: 'Subscribe',
+  createPush: 'Create push config',
+  listPush: 'List push configs',
+  getPush: 'Get push config',
+  deletePush: 'Delete push config',
+};
+
+/** The outcome of a call to an agent: its result, or why there's none. */
+type Outcome = { result: AgentResult; binding: string; error?: undefined } | { result?: undefined; binding: string; error: string };
+
+function activityOf(label: string, out: Outcome): TaskActivity {
+  const base = { id: itemId(), label, time: Date.now() };
+  return out.result ? { ...base, type: 'result', result: out.result, binding: out.binding } : { ...base, type: 'error', message: out.error };
+}
+
 export function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
   const [{ agents, selectedId }, dispatch] = useReducer(agentsReducer, initialAgentsState);
   const nextId = useRef(1);
   const started = useRef(false);
   const streams = useRef(new Map<string, AbortController>());
+  // SubscribeToTask streams, by agent ID and task ID.
+  const subscriptions = useRef(new Map<string, AbortController>());
   // Agents removed while a connection to them was being made.
   const removed = useRef(new Set<string>());
   const [layout, { setWidth, setOpen, resetWidth }] = useLayout();
@@ -61,6 +87,10 @@ export function App() {
   const [tab, setTab] = useState('chat');
   const [trafficEntry, setTrafficEntry] = useState<string>();
   const traffic = useTraffic(session.state === 'ready');
+  const webhooks = session.state === 'ready' && session.config.features.webhooks;
+  const feed = useNotifications(webhooks, (connectionId, conversation) =>
+    dispatch({ type: 'notificationConversation', connectionId, ...conversation }),
+  );
 
   const closePanel = useCallback(
     (side: Side) => {
@@ -132,6 +162,8 @@ export function App() {
       interface: { url: iface.url, protocolBinding: iface.protocolBinding, protocolVersion: iface.protocolVersion, tenant: iface.tenant },
       // A new connection, say after a settings change, continues the conversation.
       contextId: agent.resetContext ? undefined : agent.connection?.contextId,
+      openTask: agent.resetContext ? undefined : agent.connection?.openTask,
+      replaces: agent.connection?.id,
     };
     if (agent.result?.payload) {
       req.card = agent.result.payload.raw;
@@ -147,21 +179,28 @@ export function App() {
     return conn;
   }
 
-  async function send(agent: AgentEntry, req: SendRequest, stream: boolean, echo: SentEcho) {
+  /** Sends a message and reports whether the agent answered without an error. */
+  async function send(agent: AgentEntry, req: SendRequest, stream: boolean, echo: SentEcho): Promise<boolean> {
     const id = agent.id;
+    let answered = false;
     const binding = selectedInterfaceOf(agent)?.protocolBinding ?? '';
     dispatch({ type: 'chat', id, item: { id: itemId(), type: 'user', ...echo, stream, time: Date.now() } });
     dispatch({ type: 'busy', id, busy: true });
     if (agent.resetContext) {
       req = { ...req, options: { ...req.options, newContext: true } };
+    } else if (agent.newTask) {
+      req = { ...req, options: { ...req.options, newTask: true } };
     }
     const abort = new AbortController();
     streams.current.set(id, abort);
     try {
       const conn = await connect(agent);
       const onResult = (result: AgentResult) => {
+        answered ||= !result.call.error;
         dispatch({ type: 'chat', id, item: { id: itemId(), type: 'result', result, binding, time: Date.now() } });
-        dispatch({ type: 'contextId', id, contextId: result.contextId });
+        dispatch({ type: 'conversation', id, contextId: result.contextId, openTask: result.openTask, source: 'send' });
+        const ref = taskRef(result, binding);
+        if (ref) dispatch({ type: 'task', id, ...ref, time: Date.now() });
       };
       if (stream) {
         await api.stream(conn.id, req, onResult, abort.signal);
@@ -178,6 +217,126 @@ export function App() {
       streams.current.delete(id);
       dispatch({ type: 'busy', id, busy: false });
     }
+    return answered;
+  }
+
+  /** Calls the agent through its connection, connecting first if needed. */
+  async function call(agent: AgentEntry, run: (connectionId: string) => Promise<AgentResult>): Promise<Outcome> {
+    const binding = selectedInterfaceOf(agent)?.protocolBinding ?? '';
+    try {
+      const conn = await connect(agent);
+      const result = await run(conn.id);
+      dispatch({ type: 'conversation', id: agent.id, contextId: result.contextId, openTask: result.openTask, source: 'other' });
+      return { result, binding };
+    } catch (err) {
+      return { binding, error: message(err) };
+    }
+  }
+
+  /** Records a result about a task in its activity, with the state it reports. */
+  function recordTask(agent: AgentEntry, taskId: string, label: string, out: Outcome, select = false) {
+    const ref = out.result && taskRef(out.result, out.binding);
+    const seen = ref?.taskId === taskId ? { state: ref.state, contextId: ref.contextId } : {};
+    dispatch({ type: 'task', id: agent.id, taskId, ...seen, time: Date.now(), activity: activityOf(label, out), select });
+  }
+
+  async function getTask(agent: AgentEntry, taskId: string, historyLength?: number) {
+    const out = await call(agent, (conn) => api.getTask(conn, taskId, historyLength));
+    const ref = out.result && taskRef(out.result, out.binding);
+    if (ref) {
+      recordTask(agent, ref.taskId, operationLabels.get, out, true);
+      dispatch({ type: 'taskLookup', id: agent.id, lookup: undefined });
+    } else {
+      dispatch({ type: 'taskLookup', id: agent.id, lookup: { activity: activityOf(operationLabels.get, out) } });
+    }
+  }
+
+  async function listTasks(agent: AgentEntry, query: ListTasksQuery) {
+    const out = await call(agent, (conn) => api.listTasks(conn, query));
+    const payload = out.result?.call.error ? undefined : out.result?.payload;
+    if (payload) {
+      for (const raw of asObjects(asObject(payload.raw).tasks)) {
+        const view = viewPayload(raw, payload.protocolVersion, out.binding);
+        if (view.taskId) dispatch({ type: 'task', id: agent.id, taskId: view.taskId, state: view.state, contextId: view.contextId, time: Date.now() });
+      }
+    }
+    dispatch({ type: 'taskLookup', id: agent.id, lookup: { activity: activityOf('List tasks', out), query } });
+  }
+
+  async function subscribe(agent: AgentEntry, taskId: string) {
+    const key = `${agent.id}\n${taskId}`;
+    if (subscriptions.current.has(key)) return;
+    const abort = new AbortController();
+    subscriptions.current.set(key, abort);
+    dispatch({ type: 'subscribed', id: agent.id, taskId, subscribed: true });
+    const note = (text: string) => dispatch({ type: 'task', id: agent.id, taskId, time: Date.now(), activity: { id: itemId(), type: 'note', message: text, time: Date.now() } });
+    const binding = selectedInterfaceOf(agent)?.protocolBinding ?? '';
+    try {
+      const conn = await connect(agent);
+      await api.subscribeTask(
+        conn.id,
+        taskId,
+        (result) => {
+          recordTask(agent, taskId, operationLabels.subscribe, { result, binding });
+          dispatch({ type: 'conversation', id: agent.id, contextId: result.contextId, openTask: result.openTask, source: 'other' });
+        },
+        abort.signal,
+      );
+      note('The subscription ended.');
+    } catch (err) {
+      if (abort.signal.aborted) note('Stopped.');
+      else recordTask(agent, taskId, operationLabels.subscribe, { binding, error: message(err) });
+    } finally {
+      subscriptions.current.delete(key);
+      dispatch({ type: 'subscribed', id: agent.id, taskId, subscribed: false });
+    }
+  }
+
+  async function taskOperation(agent: AgentEntry, taskId: string, op: TaskOperation) {
+    switch (op.type) {
+      case 'stop':
+        subscriptions.current.get(`${agent.id}\n${taskId}`)?.abort();
+        return;
+      case 'subscribe':
+        return subscribe(agent, taskId);
+    }
+    const out = await call(agent, (conn) => {
+      switch (op.type) {
+        case 'get':
+          return api.getTask(conn, taskId);
+        case 'cancel':
+          return api.cancelTask(conn, taskId);
+        case 'createPush':
+          return api.createPushConfig(conn, taskId, op.req);
+        case 'listPush':
+          return api.listPushConfigs(conn, taskId);
+        case 'getPush':
+          return api.getPushConfig(conn, taskId, op.configId);
+        case 'deletePush':
+          return api.deletePushConfig(conn, taskId, op.configId);
+      }
+    });
+    recordTask(agent, taskId, operationLabels[op.type], out);
+    if (!out.result || out.result.call.error) return;
+    const raw = out.result.payload?.raw;
+    if (op.type === 'listPush' && raw !== undefined) {
+      dispatch({ type: 'pushConfigs', id: agent.id, taskId, replace: viewPushConfigs(raw) });
+    } else if ((op.type === 'createPush' || op.type === 'getPush') && raw !== undefined) {
+      dispatch({ type: 'pushConfigs', id: agent.id, taskId, upsert: viewPushConfig(raw) });
+    } else if (op.type === 'deletePush') {
+      dispatch({ type: 'pushConfigs', id: agent.id, taskId, remove: op.configId });
+    }
+  }
+
+  async function fetchExtendedCard(agent: AgentEntry) {
+    dispatch({ type: 'extendedCard', id: agent.id, value: { state: 'loading' } });
+    const out = await call(agent, (conn) => api.extendedCard(conn));
+    dispatch({ type: 'extendedCard', id: agent.id, value: out.result ? { state: 'done', result: out.result } : { state: 'failed', error: out.error } });
+  }
+
+  async function setWebhookBaseUrl(url: string) {
+    const config = await api.updateConfig({ webhookBaseUrl: url });
+    setSession({ state: 'ready', config });
   }
 
   const selected = agents.find((a) => a.id === selectedId);
@@ -187,6 +346,13 @@ export function App() {
   const bindings = session.state === 'ready' ? (session.config.bindings ?? coreBindings) : coreBindings;
   const stale =
     !!selected?.connection && selected.connectionKey !== connectionKey(selectedInterfaceOf(selected), selected.settings);
+  const config = session.state === 'ready' ? session.config : undefined;
+  const warning = webhookWarning(selected && selectedInterfaceOf(selected)?.url, config?.webhookBaseUrl);
+  const agentNotifications = selected ? feed.notifications.filter((n) => selected.connectionIds.includes(n.connectionId)) : [];
+  const showTraffic = (entryId: string) => {
+    setTrafficEntry(entryId);
+    setTab('traffic');
+  };
 
   return (
     <div className="app">
@@ -255,6 +421,9 @@ export function App() {
             onRemove={(id) => {
               const agent = agents.find((a) => a.id === id);
               streams.current.get(id)?.abort();
+              for (const [key, abort] of subscriptions.current) {
+                if (key.startsWith(`${id}\n`)) abort.abort();
+              }
               removed.current.add(id);
               if (agent?.connection) api.disconnect(agent.connection.id).catch(() => undefined);
               dispatch({ type: 'remove', id });
@@ -281,6 +450,8 @@ export function App() {
             onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
             onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}
             onSettings={(settings) => selected && dispatch({ type: 'settings', id: selected.id, settings })}
+            onFetchExtendedCard={() => selected && void fetchExtendedCard(selected)}
+            onShowTraffic={showTraffic}
           />
           {layout.right.open && (
             <ResizeHandle
@@ -313,22 +484,47 @@ export function App() {
                     <ChatPanel
                       key={selected.id}
                       agent={selected}
-                      onSend={(req, stream, echo) => void send(selected, req, stream, echo)}
+                      webhooks={webhooks}
+                      webhookWarning={warning}
+                      onSend={(req, stream, echo) => send(selected, req, stream, echo)}
                       onStop={() => streams.current.get(selected.id)?.abort()}
                       onNewConversation={() => {
-                        dispatch({ type: 'contextId', id: selected.id, contextId: undefined, reset: true });
+                        dispatch({ type: 'newConversation', id: selected.id });
                         dispatch({ type: 'chat', id: selected.id, item: { id: itemId(), type: 'note', message: 'New conversation.', time: Date.now() } });
                       }}
-                      onShowTraffic={(entryId) => {
-                        setTrafficEntry(entryId);
-                        setTab('traffic');
+                      onNewTask={() => {
+                        dispatch({ type: 'newTask', id: selected.id });
+                        dispatch({ type: 'chat', id: selected.id, item: { id: itemId(), type: 'note', message: 'The next message starts a new task.', time: Date.now() } });
                       }}
+                      onFormSubmitted={(key, values) => dispatch({ type: 'formSubmitted', id: selected.id, key, values })}
+                      onShowTraffic={showTraffic}
                     />
                   ) : (
                     <p className="notice small">Add an agent to send it messages.</p>
                   ),
                 },
-                { id: 'tasks', label: 'Tasks', content: <NotYet what="Task operations and push notifications" /> },
+                {
+                  id: 'tasks',
+                  label: 'Tasks',
+                  content:
+                    selected && config ? (
+                      <TasksPanel
+                        key={selected.id}
+                        agent={selected}
+                        notifications={agentNotifications}
+                        live={feed.live}
+                        config={config}
+                        onGet={(taskId, historyLength) => void getTask(selected, taskId, historyLength)}
+                        onList={(query) => void listTasks(selected, query)}
+                        onOperation={(taskId, op) => void taskOperation(selected, taskId, op)}
+                        onSelect={(taskId) => dispatch({ type: 'selectTask', id: selected.id, taskId })}
+                        onWebhookBaseUrl={setWebhookBaseUrl}
+                        onShowTraffic={showTraffic}
+                      />
+                    ) : (
+                      <p className="notice small">Add an agent to work with its tasks.</p>
+                    ),
+                },
                 {
                   id: 'traffic',
                   label: 'Traffic',
@@ -359,8 +555,4 @@ export function App() {
       )}
     </div>
   );
-}
-
-function NotYet({ what }: { what: string }) {
-  return <p className="notice small">{what} isn't available yet.</p>;
 }

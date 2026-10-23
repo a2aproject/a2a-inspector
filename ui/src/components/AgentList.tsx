@@ -1,4 +1,4 @@
-import { type FormEvent, useId, useState } from 'react';
+import { type SubmitEvent, useId, useState } from 'react';
 import { type AgentEntry, agentName, countFindings, describeCounts } from '../agents';
 
 interface Props {
@@ -17,7 +17,7 @@ export function AgentList({ id, hidden, agents, selectedId, onAdd, onSelect, onR
   const [url, setUrl] = useState('');
   const inputId = useId();
 
-  function submit(e: FormEvent) {
+  function submit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = url.trim();
     if (trimmed) {

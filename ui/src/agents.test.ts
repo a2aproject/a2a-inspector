@@ -88,6 +88,61 @@ describe('agentsReducer', () => {
     expect(closed.agents[0]?.connectionKey).toBeUndefined();
   });
 
+  it('follows the conversation, the open task and New task', () => {
+    const connection = { id: 'conn-1', interface: iface('JSONRPC'), custom: false, availableInterfaces: [], headers: [], extensions: [] };
+    const openTask = { id: 't-1', state: 'input-required' };
+    let state = run(
+      { type: 'add', id: 'a', url: 'x' },
+      { type: 'connected', id: 'a', connection, key: 'k', settings: initialSettings() },
+      { type: 'conversation', id: 'a', contextId: 'c', openTask, source: 'send' },
+    );
+    expect(state.agents[0]?.connection).toMatchObject({ contextId: 'c', openTask });
+    expect(state.agents[0]?.connectionIds).toEqual(['conn-1']);
+
+    state = agentsReducer(state, { type: 'newTask', id: 'a' });
+    // A task operation reporting the same open task doesn't undo New task; a different one does.
+    state = agentsReducer(state, { type: 'conversation', id: 'a', contextId: 'c', openTask, source: 'other' });
+    expect(state.agents[0]?.newTask).toBe(true);
+    state = agentsReducer(state, { type: 'notificationConversation', connectionId: 'conn-1', contextId: 'c', openTask: { id: 't-2', state: 'auth-required' } });
+    expect(state.agents[0]).toMatchObject({ newTask: false, connection: { openTask: { id: 't-2' } } });
+    // Notifications for other connections are ignored.
+    expect(agentsReducer(state, { type: 'notificationConversation', connectionId: 'conn-0', contextId: 'z' })).toEqual(state);
+
+    state = agentsReducer(state, { type: 'newTask', id: 'a' });
+    state = agentsReducer(state, { type: 'conversation', id: 'a', contextId: 'c', source: 'send' });
+    expect(state.agents[0]).toMatchObject({ newTask: false, connection: { openTask: undefined } });
+
+    // After New conversation, only the next message's results change the conversation.
+    state = agentsReducer(state, { type: 'newConversation', id: 'a' });
+    state = agentsReducer(state, { type: 'conversation', id: 'a', contextId: 'c', openTask, source: 'other' });
+    expect(state.agents[0]).toMatchObject({ resetContext: true, connection: { contextId: undefined, openTask: undefined } });
+    state = agentsReducer(state, { type: 'conversation', id: 'a', contextId: 'c2', source: 'send' });
+    expect(state.agents[0]).toMatchObject({ resetContext: false, connection: { contextId: 'c2' } });
+  });
+
+  it('keeps the tasks it sees with their activity and push configs', () => {
+    const activity = { id: 'x1', type: 'note' as const, message: 'hi', time: 2 };
+    let state = run(
+      { type: 'add', id: 'a', url: 'x' },
+      { type: 'task', id: 'a', taskId: 't-1', state: 'working', contextId: 'c', time: 1 },
+      { type: 'task', id: 'a', taskId: 't-1', time: 2, activity, select: true },
+      { type: 'pushConfigs', id: 'a', taskId: 't-1', upsert: { id: 'cfg-1', url: 'u1' } },
+      { type: 'pushConfigs', id: 'a', taskId: 't-1', upsert: { id: 'cfg-1', url: 'u2' } },
+      { type: 'pushConfigs', id: 'a', taskId: 't-1', upsert: { id: 'cfg-2', url: 'u3' } },
+      { type: 'pushConfigs', id: 'a', taskId: 't-1', remove: 'cfg-2' },
+      { type: 'subscribed', id: 'a', taskId: 't-2', subscribed: true },
+    );
+    expect(state.agents[0]?.selectedTask).toBe('t-1');
+    expect(state.agents[0]?.tasks).toEqual([
+      { id: 't-1', state: 'working', contextId: 'c', updated: 1, activity: [activity], configs: [{ id: 'cfg-1', url: 'u2' }], subscribed: false },
+      { id: 't-2', updated: 0, activity: [], configs: [], subscribed: true },
+    ]);
+    state = agentsReducer(state, { type: 'pushConfigs', id: 'a', taskId: 't-1', replace: [] });
+    expect(state.agents[0]?.tasks[0]?.configs).toEqual([]);
+    state = agentsReducer(state, { type: 'formSubmitted', id: 'a', key: 'item-1:p0', values: { date: 'x' } });
+    expect(state.agents[0]?.forms).toEqual({ 'item-1:p0': { date: 'x' } });
+  });
+
   it('ignores results for agents that were removed meanwhile', () => {
     const state = run({ type: 'add', id: 'a', url: 'x' }, { type: 'remove', id: 'a' }, { type: 'resolved', id: 'a', result: resolved('Echo') });
     expect(state).toEqual({ agents: [], selectedId: null });

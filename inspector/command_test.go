@@ -94,7 +94,7 @@ func (r *running) waitForURL(t *testing.T) string {
 }
 
 func TestRun(t *testing.T) {
-	r := start(t, "--port", "0", "-a", "localhost:9999")
+	r := start(t, "--port", "0", "-a", "localhost:9999", "--webhook-url", "https://tunnel.example.com/")
 	startURL := r.waitForURL(t)
 	if !strings.HasPrefix(startURL, "http://127.0.0.1:") || !strings.Contains(startURL, "/?token=") {
 		t.Fatalf("URL = %q", startURL)
@@ -127,13 +127,18 @@ func TestRun(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var config struct {
-		AgentCardURL string `json:"agentCardUrl"`
+		AgentCardURL          string `json:"agentCardUrl"`
+		WebhookBaseURL        string `json:"webhookBaseUrl"`
+		DefaultWebhookBaseURL string `json:"defaultWebhookBaseUrl"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
 		t.Fatal(err)
 	}
 	if config.AgentCardURL != "http://localhost:9999/.well-known/agent-card.json" {
 		t.Errorf("agentCardUrl = %q", config.AgentCardURL)
+	}
+	if config.WebhookBaseURL != "https://tunnel.example.com" || config.DefaultWebhookBaseURL != base {
+		t.Errorf("webhookBaseUrl = %q, defaultWebhookBaseUrl = %q, want the flag and %q", config.WebhookBaseURL, config.DefaultWebhookBaseURL, base)
 	}
 
 	resp, err = client.Get(base + "/")
@@ -219,7 +224,7 @@ func TestFlagErrors(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, nil)
-	for flag, want := range map[string]string{"port": "8080", "host": "127.0.0.1", "no-open": "false", "agent-card": ""} {
+	for flag, want := range map[string]string{"port": "8080", "host": "127.0.0.1", "no-open": "false", "agent-card": "", "webhook-url": ""} {
 		if got := cmd.Flags().Lookup(flag).DefValue; got != want {
 			t.Errorf("--%s default = %q, want %q", flag, got, want)
 		}
@@ -258,13 +263,13 @@ func TestStartURL(t *testing.T) {
 }
 
 func TestServerOptions(t *testing.T) {
-	stubby := Transport{
-		Protocol: "STUBBY",
+	custom := Transport{
+		Protocol: "CUSTOM",
 		Factory: a2aclient.TransportFactoryFn(func(context.Context, *a2a.AgentCard, *a2a.AgentInterface) (a2aclient.Transport, error) {
 			return nil, errors.New("not in tests")
 		}),
 	}
-	opts := Options{Transports: []Transport{stubby}}
+	opts := Options{Transports: []Transport{custom}}
 	tests := []struct {
 		name    string
 		flags   flags
@@ -281,8 +286,8 @@ func TestServerOptions(t *testing.T) {
 				t.Errorf("endpoint = %+v", e)
 			}
 		}},
-		{name: "registered transport", flags: flags{endpoint: "blade:agent", transports: []string{"stubby"}}, check: func(t *testing.T, so server.Options) {
-			if so.Endpoint.ProtocolBinding != "STUBBY" || len(so.Transports) != 1 {
+		{name: "custom transport", flags: flags{endpoint: "custom://agent", transports: []string{"custom"}}, check: func(t *testing.T, so server.Options) {
+			if so.Endpoint.ProtocolBinding != "CUSTOM" || len(so.Transports) != 1 {
 				t.Errorf("endpoint = %+v, transports = %+v", so.Endpoint, so.Transports)
 			}
 		}},
@@ -300,10 +305,18 @@ func TestServerOptions(t *testing.T) {
 		{name: "endpoint with two transports", flags: flags{endpoint: "http://a", transports: []string{"rest", "grpc"}}, wantErr: "exactly one --transport"},
 		{name: "unknown transport", flags: flags{endpoint: "http://a", transports: []string{"carrier-pigeon"}}, wantErr: "unknown transport"},
 		{name: "unknown version", flags: flags{endpoint: "http://a", transports: []string{"rest"}, a2aVersion: "2"}, wantErr: "--a2a-version"},
-		{name: "registered transport without v0.3", flags: flags{endpoint: "blade:agent", transports: []string{"stubby"}, a2aVersion: "0.3"}, wantErr: "doesn't support version 0.3"},
+		{name: "custom transport without v0.3", flags: flags{endpoint: "custom://agent", transports: []string{"custom"}, a2aVersion: "0.3"}, wantErr: "doesn't support version 0.3"},
 		{name: "transport without agent", flags: flags{transports: []string{"rest"}}, wantErr: "need --agent-card or --endpoint"},
 		{name: "auth without agent", flags: flags{auth: "Bearer t"}, wantErr: "need --agent-card or --endpoint"},
 		{name: "bad service parameter", flags: flags{agentCard: "a.example.com", svcParams: []string{"novalue"}}, wantErr: "key=value"},
+		{name: "webhook URL", flags: flags{webhookURL: "https://tunnel.example.com/inspector/"}, check: func(t *testing.T, so server.Options) {
+			if so.WebhookBaseURL != "https://tunnel.example.com/inspector" {
+				t.Errorf("webhook base URL = %q", so.WebhookBaseURL)
+			}
+		}},
+		{name: "relative webhook URL", flags: flags{webhookURL: "tunnel.example.com"}, wantErr: "--webhook-url"},
+		{name: "webhook URL with a query", flags: flags{webhookURL: "http://tunnel.example.com/?a=b"}, wantErr: "query"},
+		{name: "webhook URL with another scheme", flags: flags{webhookURL: "ftp://tunnel.example.com"}, wantErr: "http or https"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -323,11 +336,11 @@ func TestServerOptions(t *testing.T) {
 }
 
 func TestTransportFlags(t *testing.T) {
-	var renamed string
-	cmd := newCommand(Options{Transports: []Transport{{Protocol: "STUBBY", AddFlags: func(fs *pflag.FlagSet) {
-		fs.StringVar(&renamed, "renamed-as", "", "Service name")
+	var option string
+	cmd := newCommand(Options{Transports: []Transport{{Protocol: "CUSTOM", AddFlags: func(fs *pflag.FlagSet) {
+		fs.StringVar(&option, "custom-option", "", "Option of the custom transport")
 	}}}}, &syncBuffer{}, &syncBuffer{}, nil)
-	if err := cmd.ParseFlags([]string{"--renamed-as", "svc"}); err != nil || renamed != "svc" {
-		t.Errorf("ParseFlags() = %v, renamed = %q", err, renamed)
+	if err := cmd.ParseFlags([]string{"--custom-option", "value"}); err != nil || option != "value" {
+		t.Errorf("ParseFlags() = %v, option = %q", err, option)
 	}
 }

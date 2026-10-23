@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import type { AgentResult, CardResolveResponse, Config, Connection, TrafficEntry } from './api/types';
+import type { AgentResult, CardResolveResponse, Config, Connection, Notification, TrafficEntry } from './api/types';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -22,8 +22,32 @@ function sse(events: { event?: string; data: unknown }[], closed = false): Respo
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+/** A text/event-stream response the test writes events to while it's open. */
+function liveSse() {
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }),
+    send(event: string, data: unknown) {
+      controller?.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    },
+    /** Fails the stream, as aborting a fetch does. */
+    fail() {
+      controller?.error(new DOMException('Aborted', 'AbortError'));
+    },
+  };
+}
+
 function mockApi(routes: Record<string, Route>) {
-  const all: Record<string, Route> = { '/api/traffic': () => sse([{ event: 'snapshot', data: { entries: [] } }]), ...routes };
+  const all: Record<string, Route> = {
+    '/api/traffic': () => sse([{ event: 'snapshot', data: { entries: [] } }]),
+    '/api/hooks': () => sse([{ event: 'snapshot', data: { notifications: [] } }]),
+    ...routes,
+  };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const route = all[url];
@@ -36,7 +60,12 @@ function mockApi(routes: Record<string, Route>) {
 
 const addAgentButton = () => within(screen.getByRole('navigation', { name: 'Agents' })).getByRole('button', { name: 'Add' });
 
-const config: Config = { mode: 'local', features: { serve: false, webhooks: false } };
+const config: Config = {
+  mode: 'local',
+  features: { serve: false, webhooks: true },
+  webhookBaseUrl: 'http://127.0.0.1:8080',
+  defaultWebhookBaseUrl: 'http://127.0.0.1:8080',
+};
 
 const resolved: CardResolveResponse = {
   cardUrl: 'http://localhost:9999/.well-known/agent-card.json',
@@ -156,7 +185,7 @@ describe('App', () => {
     expect(fetch.mock.calls.filter(([url]) => url === '/api/card:resolve')).toHaveLength(3);
   });
 
-  it('closes a panel dragged past its minimum width, as VS Code does', async () => {
+  it('closes a panel dragged past its minimum width', async () => {
     mockApi({ '/api/config': () => json(config) });
     const user = userEvent.setup();
     render(<App />);
@@ -237,10 +266,10 @@ describe('App', () => {
     const body = (fetch: ReturnType<typeof mockApi>, url: string, n = 0) =>
       JSON.parse(String(fetch.mock.calls.filter(([u]) => u === url)[n]?.[1]?.body)) as Record<string, unknown>;
 
-    async function openAgent(routes: Record<string, Route>) {
+    async function openAgent(routes: Record<string, Route>, card: CardResolveResponse = resolved) {
       const fetch = mockApi({
         '/api/config': () => json({ ...config, agentCardUrl: 'http://localhost:9999/.well-known/agent-card.json' }),
-        '/api/card:resolve': () => json(resolved),
+        '/api/card:resolve': () => json(card),
         ...routes,
       });
       const user = userEvent.setup();
@@ -373,6 +402,7 @@ describe('App', () => {
         auth: { bearer: { ref: 'sec-1' } },
         headers: [{ name: 'X-Trace', value: '1' }],
         contextId: 'ctx-1',
+        replaces: 'conn-1',
       });
       expect(fetch.mock.calls.some(([u, init]) => u === '/api/connections/conn-1' && init?.method === 'DELETE')).toBe(true);
     });
@@ -427,6 +457,323 @@ describe('App', () => {
       await user.click(await screen.findByRole('button', { name: 'Stop' }));
       expect(await screen.findByText('Stopped.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    });
+
+    it('shows which task the next message continues and starts a new one', async () => {
+      const openTask = { id: '0198f1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b', state: 'input-required' };
+      const { fetch, user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/messages:send': () => json({ ...result(task('TASK_STATE_INPUT_REQUIRED')), openTask }),
+      });
+      await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'book a trip{Enter}');
+
+      const line = await screen.findByText(/Continues task/);
+      expect(line).toHaveTextContent('Continues task …2e3f4a5b (input-required)');
+      expect(within(line).getByText('…2e3f4a5b')).toHaveAttribute('title', openTask.id);
+      await user.click(screen.getByRole('button', { name: 'New task' }));
+      expect(screen.queryByText(/Continues task/)).not.toBeInTheDocument();
+      expect(screen.getByText('The next message starts a new task.')).toBeInTheDocument();
+
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'something else{Enter}');
+      await vi.waitFor(() => expect(fetch.mock.calls.filter(([u]) => u === '/api/connections/conn-1/messages:send')).toHaveLength(2));
+      expect(body(fetch, '/api/connections/conn-1/messages:send', 1)).toEqual({ compose: { text: 'something else', attachments: [] }, options: { newTask: true } });
+      // The result reports the open task again, so the line is back.
+      expect(await screen.findByText(/Continues task/)).toBeInTheDocument();
+    });
+
+    it('says when a follow-up reuses the webhook its task already notifies', async () => {
+      const openTask = { id: 't-1', state: 'input-required' };
+      const webhook = { id: 'wh-1', url: 'http://127.0.0.1:8080/hooks/wh-1' };
+      let sends = 0;
+      const { fetch, user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/messages:send': () => json({ ...result(task('TASK_STATE_INPUT_REQUIRED')), openTask, webhook: { ...webhook, existing: sends++ > 0 } }),
+      });
+      await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Push notifications' }));
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'book a trip{Enter}');
+      expect(await screen.findByText(/Push notifications go to/)).toHaveTextContent(`Push notifications go to ${webhook.url}`);
+
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'to Paris{Enter}');
+      expect(await screen.findByText(/already go to/)).toHaveTextContent(
+        `Push notifications for this task already go to ${webhook.url}, so the message carries no new config.`,
+      );
+      // The UI asks for push notifications either way; the backend decides.
+      expect(body(fetch, '/api/connections/conn-1/messages:send', 1)).toEqual({ compose: { text: 'to Paris', attachments: [] }, options: { pushNotifications: true } });
+    });
+
+    it('gets, cancels and lists tasks in the Tasks tab', async () => {
+      const bare = (state: string) => ({ id: 't-1', contextId: 'ctx-1', status: { state } });
+      const { fetch, user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/tasks/nope': () =>
+          json({ call: { latencyMs: 2, error: { a2aError: 'TaskNotFoundError', code: -32001, message: 'Task not found' } }, contextId: 'ctx-1' }),
+        '/api/connections/conn-1/tasks/t-1?historyLength=2': () => json(result(bare('TASK_STATE_WORKING'))),
+        '/api/connections/conn-1/tasks/t-1:cancel': () => json(result(bare('TASK_STATE_CANCELED'))),
+        '/api/connections/conn-1/tasks?status=working&pageSize=1': () =>
+          json(result({ tasks: [{ id: 't-2', contextId: 'ctx-1', status: { state: 'TASK_STATE_WORKING' } }], nextPageToken: 'p2' })),
+        '/api/connections/conn-1/tasks?status=working&pageSize=1&pageToken=p2': () => json(result({ tasks: [{ id: 't-3', status: { state: 'TASK_STATE_SUBMITTED' } }] })),
+      });
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      const getForm = within(screen.getByRole('form', { name: 'Get a task' }));
+
+      await user.type(getForm.getByLabelText('Task ID'), 'nope');
+      await user.click(getForm.getByRole('button', { name: 'Get task' }));
+      expect(await screen.findByText('TaskNotFoundError')).toBeInTheDocument();
+
+      await user.clear(getForm.getByLabelText('Task ID'));
+      await user.type(getForm.getByLabelText('Task ID'), 't-1');
+      await user.type(getForm.getByLabelText('History length'), '2');
+      await user.click(getForm.getByRole('button', { name: 'Get task' }));
+      const row = await screen.findByRole('button', { name: /t-1/, expanded: true });
+      expect(within(row).getByText('working')).toBeInTheDocument();
+      expect(screen.queryByText('TaskNotFoundError')).not.toBeInTheDocument();
+      const activity = within(screen.getByRole('list', { name: 'Activity' }));
+      expect(activity.getByText('Get task')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Cancel task' }));
+      expect(await within(row).findByText('canceled')).toBeInTheDocument();
+      expect(activity.getByText('Cancel task')).toBeInTheDocument();
+      expect(fetch.mock.calls.find(([u]) => u === '/api/connections/conn-1/tasks/t-1:cancel')?.[1]?.method).toBe('POST');
+
+      const listForm = within(screen.getByRole('form', { name: 'List tasks' }));
+      expect(listForm.getByLabelText('Context ID')).toHaveValue('ctx-1');
+      await user.clear(listForm.getByLabelText('Context ID'));
+      await user.selectOptions(listForm.getByLabelText('Status'), 'working');
+      await user.type(listForm.getByLabelText('Page size'), '1');
+      await user.click(listForm.getByRole('button', { name: 'List tasks' }));
+      expect(await screen.findByRole('button', { name: /t-2/ })).toBeInTheDocument();
+      expect(screen.getByText('1 task')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Next page' }));
+      expect(await screen.findByRole('button', { name: /t-3/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Next page' })).not.toBeInTheDocument();
+    });
+
+    it('subscribes to a task and stops', async () => {
+      const events = liveSse();
+      const { user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/tasks/t-1': () => json(result({ id: 't-1', status: { state: 'TASK_STATE_WORKING' } })),
+        '/api/connections/conn-1/tasks/t-1:subscribe': (init) => {
+          init?.signal?.addEventListener('abort', () => events.fail());
+          return events.response;
+        },
+      });
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      await user.type(screen.getByLabelText('Task ID'), 't-1');
+      await user.click(screen.getByRole('button', { name: 'Get task' }));
+      await user.click(await screen.findByRole('button', { name: 'Subscribe' }));
+      expect(await screen.findByText('subscribed')).toBeInTheDocument();
+
+      events.send('message', result({ artifactUpdate: { taskId: 't-1', artifact: { artifactId: 'a', parts: [{ text: 'chunk 1' }] } } }));
+      const activity = within(screen.getByRole('list', { name: 'Activity' }));
+      expect(await activity.findByText('chunk 1')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(await activity.findByText('Stopped.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument();
+    });
+
+    it('does not offer ListTasks for v0.3 interfaces', async () => {
+      const { user } = await openAgent({});
+      await user.click(within(screen.getByRole('group', { name: 'Interface' })).getAllByRole('radio')[2]!);
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      expect(screen.queryByRole('form', { name: 'List tasks' })).not.toBeInTheDocument();
+      expect(screen.getByText(/ListTasks doesn't exist in v0.3/)).toBeInTheDocument();
+    });
+
+    it('shows push notifications next to their task', async () => {
+      const hooks = liveSse();
+      const notification: Notification = {
+        id: 'nt-1',
+        webhookId: 'wh-1',
+        connectionId: 'conn-1',
+        taskId: 't-1',
+        time: '2026-10-22T10:00:00Z',
+        tokenValid: true,
+        tokenHeader: 'X-A2A-Notification-Token',
+        payload: {
+          protocolVersion: '1.0',
+          raw: { statusUpdate: { taskId: 't-1', contextId: 'ctx-1', status: { state: 'TASK_STATE_INPUT_REQUIRED', message: { role: 'ROLE_AGENT', parts: [{ text: 'Which date?' }] } } } },
+          validation: { findings: [] },
+        },
+        headers: [{ name: 'X-A2A-Notification-Token', value: '••••abcd' }],
+        conversation: { contextId: 'ctx-1', openTask: { id: 't-1', state: 'input-required' } },
+      };
+      const { fetch, user } = await openAgent({
+        '/api/hooks': () => hooks.response,
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/tasks/t-1': () => json(result({ id: 't-1', contextId: 'ctx-1', status: { state: 'TASK_STATE_WORKING' } })),
+        '/api/connections/conn-1/tasks/t-1/pushNotificationConfigs': () =>
+          json({
+            ...result({ id: 'cfg-1', taskId: 't-1', url: 'http://127.0.0.1:8080/hooks/wh-1' }),
+            call: { latencyMs: 3, error: null, findings: [{ severity: 'WARNING', path: '', rule: 'capability', message: 'The card doesn\'t declare capabilities.pushNotifications.' }] },
+            webhook: { id: 'wh-1', url: 'http://127.0.0.1:8080/hooks/wh-1' },
+          }),
+      });
+      hooks.send('snapshot', { notifications: [] });
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      await user.type(screen.getByLabelText('Task ID'), 't-1');
+      await user.click(screen.getByRole('button', { name: 'Get task' }));
+      const row = await screen.findByRole('button', { name: /t-1/, expanded: true });
+      expect(within(row).getByText('0 notifications')).toBeInTheDocument();
+      expect(screen.getByText('Notifications live')).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Config ID'), 'cfg-1');
+      await user.click(screen.getByRole('button', { name: 'Add inspector webhook' }));
+      const configs = within(await screen.findByRole('list', { name: 'Push notification configs' }));
+      expect(configs.getByText('cfg-1')).toBeInTheDocument();
+      expect(body(fetch, '/api/connections/conn-1/tasks/t-1/pushNotificationConfigs')).toEqual({ inspectorWebhook: true, id: 'cfg-1' });
+      expect(screen.getByText("The card doesn't declare capabilities.pushNotifications.")).toBeInTheDocument();
+      expect(screen.getByText(/Push notifications go to/)).toBeInTheDocument();
+
+      // The backend stamps notifications when they arrive, after the Get above.
+      hooks.send('notification', { ...notification, time: new Date().toISOString() });
+      const activity = within(screen.getByRole('list', { name: 'Activity' }));
+      expect(await activity.findByText('Which date?')).toBeInTheDocument();
+      expect(activity.getByText('Token valid')).toBeInTheDocument();
+      expect(activity.getByText('••••abcd')).toBeInTheDocument();
+      expect(within(row).getByText('1 notification')).toBeInTheDocument();
+      expect(within(row).getByText('input-required')).toBeInTheDocument();
+
+      // A notification without the webhook's token is shown, but doesn't change the task.
+      const forged = { ...notification, id: 'nt-2', tokenValid: false, time: new Date().toISOString(), conversation: undefined };
+      forged.payload = { ...notification.payload!, raw: { statusUpdate: { taskId: 't-1', contextId: 'ctx-1', status: { state: 'TASK_STATE_FAILED' } } } };
+      hooks.send('notification', forged);
+      expect(await activity.findByText('Token invalid')).toBeInTheDocument();
+      expect(within(row).getByText('2 notifications')).toBeInTheDocument();
+      expect(within(row).getByText('input-required')).toBeInTheDocument();
+
+      // The notification moved the conversation on, so the next message continues the task.
+      await user.click(screen.getByRole('tab', { name: 'Chat' }));
+      expect(screen.getByText(/Continues task/)).toHaveTextContent('Continues task t-1 (input-required)');
+
+      // After the feed reconnects, its snapshot brings the conversation up to date.
+      hooks.send('snapshot', { notifications: [], conversations: { 'conn-1': { contextId: 'ctx-1', openTask: { id: 't-9', state: 'auth-required' } } } });
+      await vi.waitFor(() => expect(screen.getByText(/Continues task/)).toHaveTextContent('Continues task t-9 (auth-required)'));
+    });
+
+    it('warns when a remote agent gets a loopback webhook URL, and changes it', async () => {
+      const remote: CardResolveResponse = {
+        ...resolved,
+        interfaces: [{ ...resolved.interfaces[0]!, url: 'https://agent.example.com/a2a' }],
+      };
+      let patched: Config | undefined;
+      const { fetch, user } = await openAgent(
+        {
+          '/api/connections': () => json({ ...connection, interface: remote.interfaces[0]! }, 201),
+          '/api/connections/conn-1/tasks/t-1': () => json(result({ id: 't-1', status: { state: 'TASK_STATE_WORKING' } })),
+          '/api/config': (init) => {
+            if (init?.method !== 'PATCH') return json({ ...config, agentCardUrl: 'http://localhost:9999/.well-known/agent-card.json' });
+            const { webhookBaseUrl } = JSON.parse(String(init.body)) as { webhookBaseUrl: string };
+            if (!webhookBaseUrl.startsWith('https://')) return json({ error: { message: 'The webhook base URL must be an http(s) URL.' } }, 400);
+            patched = { ...config, webhookBaseUrl };
+            return json(patched);
+          },
+        },
+        remote,
+      );
+      const warning = "The agent at agent.example.com can't reach http://127.0.0.1:8080. Set a webhook base URL it can reach, such as a tunnel, under Push notifications in the Tasks tab or with --webhook-url.";
+      await user.click(screen.getByRole('checkbox', { name: 'Push notifications' }));
+      expect(screen.getByText(warning)).toBeInTheDocument();
+      expect(screen.getByText("The card doesn't declare push notifications.")).toBeInTheDocument();
+
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      await user.type(screen.getByLabelText('Task ID'), 't-1');
+      await user.click(screen.getByRole('button', { name: 'Get task' }));
+      expect(await screen.findByText(warning)).toBeInTheDocument();
+      expect(screen.getByText(/Agents often refuse webhooks on loopback addresses/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Edit the webhook base URL' }));
+      const form = within(screen.getByRole('form', { name: 'Webhook base URL' }));
+      await user.type(form.getByLabelText('Webhook base URL'), 'ftp://x');
+      await user.click(form.getByRole('button', { name: 'Save' }));
+      expect(await form.findByText('The webhook base URL must be an http(s) URL.')).toBeInTheDocument();
+      await user.clear(form.getByLabelText('Webhook base URL'));
+      await user.type(form.getByLabelText('Webhook base URL'), 'https://abc.example');
+      await user.click(form.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText('https://abc.example')).toBeInTheDocument();
+      expect(patched?.webhookBaseUrl).toBe('https://abc.example');
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+      expect(fetch.mock.calls.filter(([u, init]) => u === '/api/config' && init?.method === 'PATCH')).toHaveLength(2);
+    });
+
+    it('fills in a form from the agent and submits it to continue the task, again after a failed send', async () => {
+      const form = {
+        type: 'form',
+        form: {
+          type: 'object',
+          properties: {
+            date: { type: 'string', format: 'date', title: 'Date', description: 'Date of expense' },
+            amount: { type: 'string', format: 'number', title: 'Amount' },
+            purpose: { type: 'string', title: 'Purpose' },
+          },
+          required: ['date', 'amount', 'purpose'],
+        },
+        form_data: { date: '2026-10-21', amount: '12.50', purpose: '' },
+        instructions: 'Please fill in the expense.',
+      };
+      const openTask = { id: 't-1', state: 'input-required' };
+      const asking = { task: { id: 't-1', contextId: 'ctx-1', status: { state: 'TASK_STATE_INPUT_REQUIRED', message: { role: 'ROLE_AGENT', parts: [{ data: form }] } } } };
+      let n = 0;
+      const { fetch, user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/messages:send': () => {
+          n++;
+          if (n === 1) return json({ ...result(asking), openTask });
+          if (n === 2) return json({ call: { latencyMs: 1, error: { message: 'The agent is busy.' } }, openTask });
+          return json(result(task('TASK_STATE_COMPLETED', 'Approved.')));
+        },
+      });
+      await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'reimburse lunch{Enter}');
+
+      const formEl = within(await screen.findByRole('form', { name: 'Form from the agent' }));
+      expect(formEl.getByText('Please fill in the expense.')).toBeInTheDocument();
+      expect(formEl.getByLabelText(/Date/)).toHaveAttribute('type', 'date');
+      expect(formEl.getByLabelText(/Date/)).toHaveValue('2026-10-21');
+      expect(formEl.getByLabelText(/Date/)).toHaveAccessibleDescription('Date of expense');
+      expect(formEl.getByLabelText(/Amount/)).toHaveAttribute('type', 'number');
+      expect(formEl.getByLabelText(/Purpose/)).toBeRequired();
+      await user.type(formEl.getByLabelText(/Purpose/), 'Team lunch');
+      await user.click(formEl.getByRole('button', { name: 'Submit' }));
+
+      // The agent didn't take the answer, so the form stays open.
+      expect(await screen.findByText('The agent is busy.')).toBeInTheDocument();
+      expect(formEl.getByLabelText(/Purpose/)).not.toHaveAttribute('readonly');
+      await user.click(formEl.getByRole('button', { name: 'Submit' }));
+
+      expect(await screen.findByText('Approved.')).toBeInTheDocument();
+      expect(body(fetch, '/api/connections/conn-1/messages:send', 2)).toEqual({
+        compose: { text: '', data: { date: '2026-10-21', amount: '12.50', purpose: 'Team lunch' } },
+      });
+      expect(formEl.getByText('Submitted.')).toBeInTheDocument();
+      expect(formEl.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+      expect(formEl.getByLabelText(/Purpose/)).toHaveAttribute('readonly');
+      expect(formEl.getByLabelText(/Purpose/)).toHaveValue('Team lunch');
+    });
+
+    it('fetches the extended card and shows its validation', async () => {
+      const { user } = await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/extendedAgentCard': () =>
+          json({
+            payload: {
+              protocolVersion: '1.0',
+              raw: { name: 'Echo Agent (extended)', skills: [{ id: 'secret', name: 'Secret skill' }] },
+              validation: { findings: [{ severity: 'ERROR', path: 'supportedInterfaces', rule: 'required', message: 'supportedInterfaces is required.' }] },
+            },
+            call: { trafficEntryId: 'tr-9', latencyMs: 6, error: null, findings: [{ severity: 'WARNING', path: '', rule: 'capability', message: "The card doesn't declare capabilities.extendedAgentCard." }] },
+          }),
+      });
+      await user.click(screen.getByRole('button', { name: 'Fetch' }));
+      const section = within(await screen.findByRole('region', { name: 'Extended card' }));
+      expect(await section.findByText('Echo Agent (extended)')).toBeInTheDocument();
+      expect(section.getByText('1 skill: Secret skill')).toBeInTheDocument();
+      expect(section.getByText('supportedInterfaces is required.')).toBeInTheDocument();
+      expect(section.getByText("The card doesn't declare capabilities.extendedAgentCard.")).toBeInTheDocument();
+      await user.click(section.getByRole('button', { name: 'Wire traffic' }));
+      expect(screen.getByRole('tab', { name: 'Traffic' })).toHaveAttribute('aria-selected', 'true');
     });
   });
 });

@@ -136,7 +136,7 @@ The container is now running in the background. Open your web browser and naviga
 
 ## Go version (in development)
 
-A Go rewrite of the inspector is in development and will replace the Python app. It's a single binary with the UI embedded: `cmd/a2a-inspector` is the command, `inspector/` the public package it runs (other builds can add transports and HTTP hooks through it), `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go 1.26 or later.
+A Go rewrite of the inspector is in development and will replace the Python app. It's a single binary with the UI embedded: `cmd/a2a-inspector` is the command, `inspector/` the public package it runs, `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go 1.26 or later.
 
 ```sh
 go run ./cmd/a2a-inspector                   # serves on 127.0.0.1:8080 and opens the browser
@@ -146,7 +146,9 @@ go run ./cmd/a2a-inspector -a localhost:9999 --auth "Bearer $TOKEN" --svc-param 
 go test ./...
 ```
 
-It talks to agents over JSON-RPC, HTTP+JSON and gRPC, in v1.0 and v0.3, through a2a-go, and records every exchange in the Traffic tab. The flags `-e/--endpoint`, `--transport`, `--a2a-version`, `--auth` and `--svc-param` work as in a2a-cli. The inspector prints a URL with a per-run token; the browser exchanges it for a session cookie. Run with `--help` for all the flags.
+It talks to agents over JSON-RPC, HTTP+JSON and gRPC, in v1.0 and v0.3, through a2a-go, and records every exchange in the Traffic tab. The inspector prints a URL with a per-run token; the browser exchanges it for a session cookie. Run with `--help` for all the flags.
+
+Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 
 To work on the UI, install its dependencies once (`npm install` in `ui/`), then:
 

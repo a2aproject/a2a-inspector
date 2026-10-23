@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-// IBM Plex, as in the a2a-itk dashboard, bundled rather than loaded from Google Fonts: the
-// Content-Security-Policy only allows the inspector's own fonts. Latin subsets only.
+// IBM Plex, bundled rather than loaded from a font service: the Content-Security-Policy only
+// allows the inspector's own fonts. Latin subsets only.
 import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';

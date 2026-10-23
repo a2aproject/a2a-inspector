@@ -168,7 +168,10 @@ const wrappers: [string, string, EventKind][] = [
   ['artifactUpdate', 'artifact_update', 'artifact-update'],
 ];
 
-/** Reads a SendMessage result or a stream event. */
+/**
+ * Reads a SendMessage result, a stream event or a push notification. A bare Task, as GetTask,
+ * CancelTask and ListTasks return it, is read too.
+ */
 export function viewPayload(raw: unknown, version: ProtocolVersion, binding: string): EventView {
   const obj = asObject(raw);
   if (version === '0.3' && binding === 'JSONRPC') {
@@ -183,5 +186,38 @@ export function viewPayload(raw: unknown, version: ProtocolVersion, binding: str
       return build(shape, kind, asObject(inner));
     }
   }
+  // None of the wrapper names is a field of Task, so an object with an id and a status is one.
+  if (typeof obj.id === 'string' && obj.status !== null && typeof obj.status === 'object') {
+    return build(shape, 'task', obj);
+  }
   return { kind: 'unknown', parts: [], artifacts: [] };
+}
+
+export interface PushConfigView {
+  /** Missing when a v0.3 agent returns a config without one. */
+  id?: string;
+  taskId?: string;
+  url?: string;
+}
+
+/**
+ * Reads a push notification config in any version: v1.0 has the fields at the top, v0.3 nests
+ * them in pushNotificationConfig, next to taskId (JSON-RPC) or a resource name (HTTP+JSON, gRPC)
+ * of the form "tasks/{task}/pushNotificationConfigs/{id}".
+ */
+export function viewPushConfig(raw: unknown): PushConfigView {
+  const obj = asObject(raw);
+  const nested = member(obj, 'pushNotificationConfig', 'push_notification_config');
+  const inner = nested === undefined ? obj : asObject(nested);
+  const name = asString(obj.name)?.match(/^tasks\/([^/]+)\/pushNotificationConfigs\/([^/]+)$/);
+  return {
+    id: asString(inner.id) || name?.[2],
+    taskId: asString(member(obj, 'taskId', 'task_id')) ?? name?.[1],
+    url: asString(inner.url),
+  };
+}
+
+/** Reads a list of push notification configs: a bare array (v0.3 JSON-RPC) or {configs}. */
+export function viewPushConfigs(raw: unknown): PushConfigView[] {
+  return (Array.isArray(raw) ? raw : asObjects(asObject(raw).configs)).map(viewPushConfig);
 }

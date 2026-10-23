@@ -1,4 +1,4 @@
-import { type FormEvent, useId, useState } from 'react';
+import { type SubmitEvent, useId, useState } from 'react';
 import type { AgentInterface } from '../api/types';
 
 interface Props {
@@ -106,7 +106,7 @@ function AddInterface({ bindings, onAdd }: { bindings: string[]; onAdd: (iface: 
   const [binding, setBinding] = useState(bindings[0] ?? 'JSONRPC');
   const [version, setVersion] = useState('1.0');
 
-  function submit(e: FormEvent) {
+  function submit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = url.trim();
     if (!trimmed) return;

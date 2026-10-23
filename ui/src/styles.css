@@ -1,5 +1,5 @@
-/* The a2a-itk dashboard's theme: a monochrome true-neutral scale with near-black and near-white
-   accents, set in IBM Plex. Status colors are the only color on the page. */
+/* A monochrome true-neutral scale with near-black and near-white accents, set in IBM Plex. Status
+   colors are the only color on the page. */
 
 :root {
   --bg: #f4f4f4;
@@ -202,7 +202,7 @@ button:disabled {
   background: var(--bg-subtle);
 }
 
-/* Pill buttons, as the dashboard's theme toggle. */
+/* Pill buttons, such as the theme toggle. */
 .theme-toggle,
 .toggle {
   font-size: 13px;
@@ -228,6 +228,12 @@ button:disabled {
 
 input[type='text'],
 input[type='password'],
+input[type='number'],
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
+input[type='email'],
+input[type='url'],
 select,
 textarea {
   font: inherit;
@@ -243,6 +249,12 @@ textarea {
 
 input[type='text']:hover,
 input[type='password']:hover,
+input[type='number']:hover,
+input[type='date']:hover,
+input[type='time']:hover,
+input[type='datetime-local']:hover,
+input[type='email']:hover,
+input[type='url']:hover,
 select:hover,
 textarea:hover {
   border-color: var(--border-strong);
@@ -561,7 +573,7 @@ body.resizing {
   user-select: none;
 }
 
-/* At a limit, a one-way cursor shows the way the divider can still move, as in VS Code. */
+/* At a limit, a one-way cursor shows the way the divider can still move. */
 .resize-handle-e,
 body.resizing.resizing-e {
   cursor: e-resize;
@@ -785,7 +797,7 @@ details summary {
   font-weight: 500;
 }
 
-/* Tables, as the dashboard's matrix: small uppercase headers, quiet row rules. */
+/* Tables: small uppercase headers, quiet row rules. */
 
 .table-scroll {
   overflow-x: auto;
@@ -833,7 +845,7 @@ td .pill,
   margin-left: 6px;
 }
 
-/* Tabs, underlined as the dashboard's SDK tabs */
+/* Tabs, underlined */
 
 .tab-row {
   display: flex;
@@ -1116,6 +1128,10 @@ input[type='file']:hover::file-selector-button {
   background: var(--bg-subtle);
   margin-left: 12%;
 }
+/* The bubble already has the subtle background code blocks use. */
+.bubble-user pre {
+  background: var(--bg-raised);
+}
 .bubble-error {
   border-color: color-mix(in srgb, var(--fail) 35%, transparent);
   background: color-mix(in srgb, var(--fail) 6%, var(--bg-raised));
@@ -1171,6 +1187,38 @@ input[type='file']:hover::file-selector-button {
 }
 .composer details {
   font-size: 13px;
+}
+/* The task the next message continues, with "New task". */
+.composer-task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.composer-task p {
+  margin: 0;
+  flex: 1;
+  min-width: 12rem;
+}
+.composer .note {
+  margin: 0;
+}
+
+/* A form an agent sent; inputs fill the field column and help sits under them. */
+.form-part {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  margin-top: 8px;
+}
+.form-part .fields input:not([type='checkbox']) {
+  width: 100%;
+}
+.form-part .help {
+  margin-top: 2px;
+}
+.form-part input[readonly] {
+  color: var(--text-muted);
+  background: var(--bg-subtle);
 }
 .attachments {
   list-style: none;
@@ -1240,6 +1288,10 @@ pre.json {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A short task ID is already shortened; it keeps its width. */
+.task-id {
+  flex: 1 0 auto;
+}
 .traffic-detail {
   padding: 4px 12px 12px;
   background: var(--bg-raised);
@@ -1266,4 +1318,73 @@ table.headers th {
 }
 .frames pre {
   margin-top: 4px;
+}
+
+/* Tasks */
+.tasks > p {
+  margin-bottom: 10px;
+}
+.task-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.card + .card.task-form {
+  margin-top: 0;
+}
+.task-form .fields {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+.task-lookup {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.task-lookup > .button-quiet {
+  justify-self: start;
+}
+.tasks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 16px 0 8px;
+}
+.tasks-head h3 {
+  font-size: 14px;
+  letter-spacing: 0;
+  margin-right: auto;
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.push {
+  margin-top: 4px;
+}
+.push details {
+  margin: 4px 0 8px;
+}
+.push .note {
+  margin: 4px 0 8px;
+}
+.configs > li {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.configs .task-actions {
+  margin: 4px 0 0;
+}
+.activity {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
 }
