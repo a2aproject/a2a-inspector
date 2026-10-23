@@ -53,6 +53,9 @@ type callError struct {
 	Code int `json:"code,omitempty"`
 	// Raw is the error as the agent sent it, or the start of the response body.
 	Raw any `json:"raw,omitempty"`
+	// rejected is set when the agent answered with an error or never got
+	// the call, so it took nothing from it, such as a push notification config.
+	rejected bool
 }
 
 type features struct {
@@ -69,6 +72,10 @@ type configResponse struct {
 	Features features       `json:"features"`
 	// Bindings lists the protocol bindings the inspector supports.
 	Bindings []string `json:"bindings"`
+	// WebhookBaseURL is the URL new webhooks are created under, and
+	// DefaultWebhookBaseURL the inspector's own address it defaults to.
+	WebhookBaseURL        string `json:"webhookBaseUrl"`
+	DefaultWebhookBaseURL string `json:"defaultWebhookBaseUrl"`
 }
 
 // startupConfig is the agent given on the command line.
@@ -107,14 +114,61 @@ func (s *Server) newStartupConfig() (*startupConfig, error) {
 	return cfg, nil
 }
 
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) config() configResponse {
 	bindings := []string{agents.BindingJSONRPC, agents.BindingHTTPJSON, agents.BindingGRPC}
 	for _, t := range s.opts.Transports {
 		if !slices.Contains(bindings, t.Binding) {
 			bindings = append(bindings, t.Binding)
 		}
 	}
-	writeJSON(w, http.StatusOK, configResponse{Mode: "local", AgentCardURL: s.opts.AgentCardURL, Startup: s.startup, Bindings: bindings})
+	return configResponse{
+		Mode:                  "local",
+		AgentCardURL:          s.opts.AgentCardURL,
+		Startup:               s.startup,
+		Features:              features{Webhooks: true},
+		Bindings:              bindings,
+		WebhookBaseURL:        s.webhookBaseURL(),
+		DefaultWebhookBaseURL: s.defaultWebhookURL,
+	}
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.config())
+}
+
+type configPatch struct {
+	// WebhookBaseURL changes the URL new webhooks are created under for
+	// this run; "" goes back to the default.
+	WebhookBaseURL *string `json:"webhookBaseUrl"`
+}
+
+func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	var req configPatch
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	if req.WebhookBaseURL == nil {
+		writeError(w, http.StatusBadRequest, `"webhookBaseUrl" is required.`)
+		return
+	}
+	u := ""
+	if strings.TrimSpace(*req.WebhookBaseURL) != "" {
+		var err error
+		if u, err = NormalizeWebhookBaseURL(*req.WebhookBaseURL); err != nil {
+			writeError(w, http.StatusBadRequest, capitalize(err.Error())+".")
+			return
+		}
+	}
+	s.setWebhookBaseURL(u)
+	writeJSON(w, http.StatusOK, s.config())
+}
+
+// capitalize turns an error message into the start of a sentence.
+func capitalize(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
 }
 
 type cardResolveRequest struct {

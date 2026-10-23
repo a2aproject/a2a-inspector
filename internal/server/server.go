@@ -3,6 +3,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/a2aproject/a2a-inspector/internal/agents"
 	"github.com/a2aproject/a2a-inspector/internal/traffic"
@@ -50,6 +52,10 @@ type Options struct {
 	HTTPTransport http.RoundTripper
 	// Transports adds protocol bindings beyond the core ones.
 	Transports []agents.Transport
+	// WebhookBaseURL is the URL agents reach the inspector's webhook
+	// receiver under, such as a tunnel. It defaults to the inspector's own
+	// address.
+	WebhookBaseURL string
 }
 
 // Preferences choose among a card's interfaces, from --transport and --a2a-version.
@@ -74,11 +80,17 @@ type Server struct {
 	dialer       *agents.Dialer
 	secrets      *secretStore
 	conns        *connections
+	hooks        *hooks
 	startup      *startupConfig
 	mux          *http.ServeMux
 	cookieName   string
 	anyHost      bool
 	allowedHosts map[string]bool
+	// defaultWebhookURL is the inspector's own address. webhookURL replaces
+	// it when set, from the options or the UI.
+	defaultWebhookURL string
+	webhookMu         sync.Mutex
+	webhookURL        string
 	// ctx ends when the server closes; calls to agents and the traffic feed
 	// end with it, so shutting down doesn't wait for agents.
 	ctx    context.Context
@@ -108,8 +120,17 @@ func New(opts Options) (*Server, error) {
 		},
 		secrets:    newSecretStore(),
 		conns:      &connections{items: map[string]*connection{}},
+		hooks:      newHooks(),
 		mux:        http.NewServeMux(),
 		cookieName: fmt.Sprintf("a2a_inspector_%d", opts.Port),
+	}
+	s.defaultWebhookURL = "http://" + net.JoinHostPort(loopbackIfUnspecified(opts.Host), strconv.Itoa(opts.Port))
+	if opts.WebhookBaseURL != "" {
+		u, err := NormalizeWebhookBaseURL(opts.WebhookBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: %w", err)
+		}
+		s.webhookURL = u
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
@@ -120,6 +141,7 @@ func New(opts Options) (*Server, error) {
 	s.startup = startup
 
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
+	s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
 	s.mux.HandleFunc("POST /api/card:resolve", s.handleCardResolve)
 	s.mux.HandleFunc("POST /api/card:validate", s.handleCardValidate)
 	s.mux.HandleFunc("POST /api/connections", s.handleCreateConnection)
@@ -127,7 +149,17 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/connections/{id}", s.handleDeleteConnection)
 	s.mux.HandleFunc("POST /api/connections/{id}/messages:send", s.handleSend)
 	s.mux.HandleFunc("POST /api/connections/{id}/messages:stream", s.handleStream)
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks", s.handleListTasks)
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}", s.handleGetTask)
+	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}", s.handleTaskAction)
+	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.handleCreatePushConfig)
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.handleListPushConfigs)
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.handleGetPushConfig)
+	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.handleDeletePushConfig)
+	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.handleExtendedCard)
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
+	s.mux.HandleFunc("GET /api/hooks", s.handleHooks)
+	s.mux.HandleFunc("POST /hooks/{hook}", s.handleHook)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Unknown API endpoint.")
 	})
@@ -158,6 +190,45 @@ func (s *Server) callContext(r *http.Request) (context.Context, context.CancelFu
 	}
 }
 
+// webhookBaseURL returns the URL webhooks are created under.
+func (s *Server) webhookBaseURL() string {
+	s.webhookMu.Lock()
+	defer s.webhookMu.Unlock()
+	return cmp.Or(s.webhookURL, s.defaultWebhookURL)
+}
+
+// setWebhookBaseURL changes the URL new webhooks are created under; ""
+// goes back to the default.
+func (s *Server) setWebhookBaseURL(u string) {
+	s.webhookMu.Lock()
+	defer s.webhookMu.Unlock()
+	s.webhookURL = u
+}
+
+// NormalizeWebhookBaseURL checks that u is an absolute http or https URL
+// without a query or fragment, and drops a trailing slash.
+func NormalizeWebhookBaseURL(u string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(u))
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("invalid webhook base URL: %w", err)
+	case parsed.Scheme != "http" && parsed.Scheme != "https", parsed.Host == "":
+		return "", fmt.Errorf("the webhook base URL %q must be an absolute http or https URL", u)
+	case parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "":
+		return "", fmt.Errorf("the webhook base URL %q can't have a query or fragment", u)
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+// loopbackIfUnspecified returns 127.0.0.1 for the all-addresses host, where
+// the inspector is reachable through loopback.
+func loopbackIfUnspecified(host string) string {
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		return "127.0.0.1"
+	}
+	return host
+}
+
 // allowedHosts returns the Host header values the server accepts. When it
 // listens on all addresses, any host can reach it and every Host is accepted;
 // the session token still protects the API.
@@ -182,6 +253,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+
+	// Agents deliver push notifications from wherever the webhook URL
+	// reaches, such as through a tunnel or from a container, so the Host,
+	// origin and session checks don't apply. The webhook's random ID and
+	// token protect it.
+	if strings.HasPrefix(path.Clean(r.URL.Path), "/hooks/") {
+		h.Set("Cache-Control", "no-store")
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 
 	// A Host the server doesn't know means the request came through a name
 	// that only resolves to this machine, as in DNS rebinding.

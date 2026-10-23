@@ -35,6 +35,7 @@ type flags struct {
 	host       string
 	port       int
 	noOpen     bool
+	webhookURL string
 }
 
 func newCommand(opts Options, stdout, stderr io.Writer, open func(url string) error) *cobra.Command {
@@ -61,6 +62,7 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(url string) er
 	fs.StringVar(&f.host, "host", "127.0.0.1", "Address to listen on; anything but loopback makes the inspector reachable from other machines")
 	fs.IntVar(&f.port, "port", defaultPort, "Port to listen on")
 	fs.BoolVar(&f.noOpen, "no-open", false, "Don't open the browser")
+	fs.StringVar(&f.webhookURL, "webhook-url", "", "Base URL agents use to reach the inspector's webhook receiver, such as a tunnel; default: the inspector's own address")
 	for _, t := range opts.Transports {
 		if t.AddFlags != nil {
 			t.AddFlags(fs)
@@ -188,11 +190,17 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 	if len(so.StartupHeaders) > 0 && so.AgentCardURL == "" && so.Endpoint == nil {
 		return so, errors.New("--auth and --svc-param need --agent-card or --endpoint")
 	}
+	if f.webhookURL != "" {
+		u, err := server.NormalizeWebhookBaseURL(f.webhookURL)
+		if err != nil {
+			return so, fmt.Errorf("--webhook-url: %w", err)
+		}
+		so.WebhookBaseURL = u
+	}
 	return so, nil
 }
 
-// parseTransport maps a --transport value to a protocol binding, with the
-// same names as a2a-cli.
+// parseTransport maps a --transport value to a protocol binding.
 func parseTransport(s string, dialer *agents.Dialer) (string, error) {
 	switch strings.ToLower(s) {
 	case "rest":
@@ -213,8 +221,7 @@ func parseTransport(s string, dialer *agents.Dialer) (string, error) {
 	return "", fmt.Errorf("--transport: unknown transport %q; use rest, jsonrpc or grpc", s)
 }
 
-// cutServiceParam splits "key=value" or "key:value" at the first separator,
-// as a2a-cli does.
+// cutServiceParam splits "key=value" or "key:value" at the first separator.
 func cutServiceParam(kv string) (key, value string, ok bool) {
 	i := strings.IndexAny(kv, "=:")
 	if i < 0 {

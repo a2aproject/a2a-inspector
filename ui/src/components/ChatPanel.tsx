@@ -1,10 +1,10 @@
-import { type ChangeEvent, type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
-import { type AgentEntry, type ChatItem, countFindings, describeCounts, selectedInterfaceOf } from '../agents';
-import type { AgentResult, Attachment, SendRequest } from '../api/types';
-import { type EventView, type PartView, viewPayload } from '../a2a/view';
-import { safeHref, summarizeCard } from '../card';
+import { type ChangeEvent, type KeyboardEvent, type SubmitEvent, useEffect, useId, useRef, useState } from 'react';
+import { type AgentEntry, type ChatItem, selectedInterfaceOf } from '../agents';
+import type { Attachment, SendRequest } from '../api/types';
+import { summarizeCard } from '../card';
 import { rawTemplate } from '../settings';
-import { FindingList } from './FindingList';
+import { shortId } from '../tasks';
+import { AgentEvent, type FormHandler } from './AgentEvent';
 import { JsonBlock } from './JsonBlock';
 
 /** What the chat shows for the user's own message. */
@@ -12,18 +12,30 @@ export interface SentEcho {
   text: string;
   attachments: string[];
   raw?: string;
+  data?: unknown;
 }
 
 interface Props {
   agent: AgentEntry;
-  onSend: (req: SendRequest, stream: boolean, echo: SentEcho) => void;
+  /** Whether the inspector receives push notifications. */
+  webhooks: boolean;
+  /** Why the agent can't reach the inspector's webhooks, if it can't. */
+  webhookWarning?: string;
+  /** Resolves to whether the agent answered without an error. */
+  onSend: (req: SendRequest, stream: boolean, echo: SentEcho) => Promise<boolean>;
   onStop: () => void;
   onNewConversation: () => void;
+  onNewTask: () => void;
+  onFormSubmitted: (key: string, values: Record<string, unknown>) => void;
   onShowTraffic: (entryId: string) => void;
 }
 
-export function ChatPanel({ agent, onSend, onStop, onNewConversation, onShowTraffic }: Props) {
+export function ChatPanel({ agent, webhooks, webhookWarning, onSend, onStop, onNewConversation, onNewTask, onFormSubmitted, onShowTraffic }: Props) {
   const iface = selectedInterfaceOf(agent);
+  const card = agent.result?.payload && summarizeCard(agent.result.payload.raw, agent.result.payload.protocolVersion);
+  // The composer's options apply to forms answered in the transcript too.
+  const [stream, setStream] = useState(card?.streaming ?? true);
+  const [push, setPush] = useState(false);
   const transcript = useRef<HTMLOListElement>(null);
   // Follows new messages while the transcript is scrolled to the bottom, but not when the user
   // scrolled up to read.
@@ -34,10 +46,18 @@ export function ChatPanel({ agent, onSend, onStop, onNewConversation, onShowTraf
       el.scrollTop = el.scrollHeight;
     }
   }, [agent.chat.length, agent.busy]);
-  const send: Props['onSend'] = (...args) => {
+  const send = (req: SendRequest, echo: SentEcho) => {
     following.current = true;
-    onSend(...args);
+    return onSend(push ? { ...req, options: { ...req.options, pushNotifications: true } } : req, stream, echo);
   };
+  const forms = (key: string): FormHandler => ({
+    key,
+    submitted: agent.forms,
+    disabled: agent.busy,
+    // The form stays open until the agent has the answer, so a failed send can be retried.
+    onSubmit: (formKey, values) =>
+      void send({ compose: { text: '', data: values } }, { text: '', attachments: [], data: values }).then((ok) => ok && onFormSubmitted(formKey, values)),
+  });
 
   if (!iface) {
     return <p className="notice small">Pick an interface the inspector supports, or add one by hand, to send messages.</p>;
@@ -74,7 +94,7 @@ export function ChatPanel({ agent, onSend, onStop, onNewConversation, onShowTraf
       >
         {agent.chat.map((item) => (
           <li key={item.id}>
-            <ChatLine item={item} onShowTraffic={onShowTraffic} />
+            <ChatLine item={item} forms={forms(item.id)} onShowTraffic={onShowTraffic} />
           </li>
         ))}
         {agent.busy && (
@@ -83,12 +103,25 @@ export function ChatPanel({ agent, onSend, onStop, onNewConversation, onShowTraf
           </li>
         )}
       </ol>
-      <Composer agent={agent} contextId={contextId} onSend={send} onStop={onStop} />
+      <Composer
+        agent={agent}
+        contextId={contextId}
+        streaming={card?.streaming ?? true}
+        pushCapable={card?.pushNotifications ?? true}
+        stream={stream}
+        onStream={setStream}
+        push={webhooks ? push : undefined}
+        onPush={setPush}
+        webhookWarning={webhookWarning}
+        onSend={send}
+        onStop={onStop}
+        onNewTask={onNewTask}
+      />
     </div>
   );
 }
 
-function ChatLine({ item, onShowTraffic }: { item: ChatItem; onShowTraffic: (id: string) => void }) {
+function ChatLine({ item, forms, onShowTraffic }: { item: ChatItem; forms: FormHandler; onShowTraffic: (id: string) => void }) {
   switch (item.type) {
     case 'user':
       return (
@@ -101,10 +134,11 @@ function ChatLine({ item, onShowTraffic }: { item: ChatItem; onShowTraffic: (id:
           {item.text && <p className="text">{item.text}</p>}
           {item.attachments.length > 0 && <p className="faint small">Attached: {item.attachments.join(', ')}</p>}
           {item.raw !== undefined && <JsonBlock value={item.raw} label="Raw message" />}
+          {item.data !== undefined && <JsonBlock value={item.data} label="Data part" />}
         </div>
       );
     case 'result':
-      return <AgentEvent result={item.result} binding={item.binding} onShowTraffic={onShowTraffic} />;
+      return <AgentEvent result={item.result} binding={item.binding} onShowTraffic={onShowTraffic} forms={forms} />;
     case 'error':
       return (
         <div role="alert" className="notice notice-error small">
@@ -113,129 +147,6 @@ function ChatLine({ item, onShowTraffic }: { item: ChatItem; onShowTraffic: (id:
       );
     case 'note':
       return <p className="faint small">{item.message}</p>;
-  }
-}
-
-const stateLevels: Record<string, string> = {
-  completed: 'chip-pass',
-  failed: 'chip-fail',
-  rejected: 'chip-fail',
-  canceled: 'chip-fail',
-  cancelled: 'chip-fail',
-  'input-required': 'chip-mixed',
-  'auth-required': 'chip-mixed',
-};
-
-const kindLabels: Record<EventView['kind'], string> = {
-  task: 'Task',
-  message: 'Message',
-  'status-update': 'Status update',
-  'artifact-update': 'Artifact update',
-  unknown: 'Unknown payload',
-};
-
-function TrafficLink({ result, onShowTraffic }: { result: AgentResult; onShowTraffic: (id: string) => void }) {
-  const id = result.call.trafficEntryId;
-  if (!id) return null;
-  return (
-    <button type="button" className="link-button" onClick={() => onShowTraffic(id)}>
-      Wire traffic
-    </button>
-  );
-}
-
-function AgentEvent({ result, binding, onShowTraffic }: { result: AgentResult; binding: string; onShowTraffic: (id: string) => void }) {
-  const callFindings = result.call.findings ?? [];
-  const error = result.call.error;
-  if (error || !result.payload) {
-    return (
-      <div className="bubble bubble-error">
-        <p className="bubble-head">
-          <span className="chip chip-fail">Error</span>
-          {error?.a2aError && <strong>{error.a2aError}</strong>}
-          {error?.code !== undefined && <span className="faint">code {error.code}</span>}
-        </p>
-        <p className="text">{error?.message ?? 'The agent sent nothing.'}</p>
-        {error?.raw !== undefined && error.raw !== null && (
-          <details>
-            <summary>As sent by the agent</summary>
-            <JsonBlock value={error.raw} />
-          </details>
-        )}
-        {callFindings.length > 0 && <FindingList findings={callFindings} />}
-        <p className="bubble-foot faint small">
-          {result.call.latencyMs} ms <TrafficLink result={result} onShowTraffic={onShowTraffic} />
-        </p>
-      </div>
-    );
-  }
-  const { payload } = result;
-  const view = viewPayload(payload.raw, payload.protocolVersion, binding);
-  const counts = countFindings(payload.validation.findings);
-  const level = counts.errors ? 'chip-fail' : counts.warnings ? 'chip-mixed' : 'chip-pass';
-  return (
-    <div className="bubble bubble-agent">
-      <p className="bubble-head">
-        <strong>{view.role === 'user' ? 'User' : 'Agent'}</strong>
-        <span className="pill">{kindLabels[view.kind]}</span>
-        {view.state && <span className={`chip ${stateLevels[view.state] ?? 'chip-skip'}`}>{view.state}</span>}
-        <span className={`chip ${level}`}>{describeCounts(counts)}</span>
-      </p>
-      {view.parts.map((part, i) => (
-        <PartContent key={i} part={part} />
-      ))}
-      {view.artifacts.map((artifact, i) => (
-        <div key={i} className="artifact">
-          <p className="faint small">Artifact {artifact.name ?? artifact.id ?? i + 1}</p>
-          {artifact.parts.map((part, j) => (
-            <PartContent key={j} part={part} />
-          ))}
-        </div>
-      ))}
-      {callFindings.length > 0 && <FindingList findings={callFindings} />}
-      {payload.validation.findings.length > 0 && (
-        <details open={counts.errors > 0}>
-          <summary>Validation against v{payload.protocolVersion}</summary>
-          <FindingList findings={payload.validation.findings} />
-        </details>
-      )}
-      <details>
-        <summary>Raw JSON</summary>
-        <JsonBlock value={payload.raw} />
-      </details>
-      <p className="bubble-foot faint small">
-        {result.call.latencyMs} ms <TrafficLink result={result} onShowTraffic={onShowTraffic} />
-      </p>
-    </div>
-  );
-}
-
-function PartContent({ part }: { part: PartView }) {
-  switch (part.kind) {
-    case 'text':
-      return <p className="text">{part.text}</p>;
-    case 'file': {
-      const href = safeHref(part.url);
-      const label = part.name ?? part.url ?? 'file';
-      return (
-        <p className="file small">
-          File:{' '}
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="break">
-              {label}
-            </a>
-          ) : (
-            <span className="mono break">{label}</span>
-          )}
-          {part.mediaType && <span className="faint"> ({part.mediaType})</span>}
-          {part.bytes !== undefined && <span className="faint"> · {Math.round((part.bytes.length * 3) / 4)} bytes inline</span>}
-        </p>
-      );
-    }
-    case 'data':
-      return <JsonBlock value={part.data} label="Data part" />;
-    default:
-      return <p className="faint small">A part the inspector can't read; see the raw JSON.</p>;
   }
 }
 
@@ -264,17 +175,34 @@ function parseObject(text: string, what: string): { value?: Record<string, unkno
   }
 }
 
-function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'onSend' | 'onStop'> & { contextId?: string }) {
+interface ComposerProps {
+  agent: AgentEntry;
+  contextId?: string;
+  /** What the card declares. */
+  streaming: boolean;
+  pushCapable: boolean;
+  stream: boolean;
+  onStream: (stream: boolean) => void;
+  /** Undefined when the inspector doesn't receive push notifications. */
+  push?: boolean;
+  onPush: (push: boolean) => void;
+  webhookWarning?: string;
+  onSend: (req: SendRequest, echo: SentEcho) => Promise<boolean>;
+  onStop: () => void;
+  onNewTask: () => void;
+}
+
+function Composer(props: ComposerProps) {
+  const { agent, contextId, streaming, pushCapable, stream, onStream, push, onPush, webhookWarning, onSend, onStop, onNewTask } = props;
   const id = useId();
   const iface = selectedInterfaceOf(agent);
-  const streaming = agent.result?.payload ? summarizeCard(agent.result.payload.raw, agent.result.payload.protocolVersion).streaming : true;
+  const openTask = agent.newTask || agent.resetContext ? undefined : agent.connection?.openTask;
   const [mode, setMode] = useState<'message' | 'raw'>('message');
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [data, setData] = useState('');
   const [metadata, setMetadata] = useState('');
   const [raw, setRaw] = useState('');
-  const [stream, setStream] = useState(streaming);
   const [error, setError] = useState<string>();
 
   async function addFiles(e: ChangeEvent<HTMLInputElement>) {
@@ -288,13 +216,13 @@ function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'o
     }
   }
 
-  function submit(e?: FormEvent) {
+  function submit(e?: SubmitEvent<HTMLFormElement>) {
     e?.preventDefault();
     if (agent.busy) return;
     setError(undefined);
     if (mode === 'raw') {
       if (!raw.trim()) return;
-      onSend({ rawMessage: raw }, stream, { text: '', attachments: [], raw });
+      void onSend({ rawMessage: raw }, { text: '', attachments: [], raw });
       return;
     }
     const parsedMeta = parseObject(metadata, 'Metadata');
@@ -312,11 +240,7 @@ function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'o
       return;
     }
     if (!text.trim() && attachments.length === 0 && parsedData === undefined) return;
-    onSend(
-      { compose: { text, attachments, data: parsedData, metadata: parsedMeta.value } },
-      stream,
-      { text, attachments: attachments.map((a) => a.name ?? 'file') },
-    );
+    void onSend({ compose: { text, attachments, data: parsedData, metadata: parsedMeta.value } }, { text, attachments: attachments.map((a) => a.name ?? 'file') });
     setText('');
     setAttachments([]);
   }
@@ -346,7 +270,7 @@ function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'o
             checked={mode === 'raw'}
             onChange={() => {
               setMode('raw');
-              if (!raw) setRaw(rawTemplate(iface, contextId));
+              if (!raw) setRaw(rawTemplate(iface, contextId, openTask?.id));
             }}
           />
           Raw {iface?.protocolBinding} {iface?.protocolVersion} message
@@ -413,12 +337,36 @@ function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'o
           {error}
         </p>
       )}
+      {openTask && (
+        <div className="composer-task">
+          {mode === 'raw' ? (
+            <p className="small">
+              Task <code title={openTask.id}>{shortId(openTask.id)}</code> is {openTask.state}. Raw messages are sent as written, so
+              add its taskId to continue it.
+            </p>
+          ) : (
+            <p className="small">
+              Continues task <code title={openTask.id}>{shortId(openTask.id)}</code> ({openTask.state})
+            </p>
+          )}
+          <button type="button" className="button button-quiet" onClick={onNewTask} disabled={agent.busy}>
+            New task
+          </button>
+        </div>
+      )}
       <div className="composer-actions">
         <label className="inline">
-          <input type="checkbox" checked={stream} onChange={(e) => setStream(e.target.checked)} />
+          <input type="checkbox" checked={stream} onChange={(e) => onStream(e.target.checked)} />
           Stream
         </label>
         {!streaming && stream && <span className="faint small">The card doesn't declare streaming.</span>}
+        {push !== undefined && (
+          <label className="inline">
+            <input type="checkbox" checked={push} onChange={(e) => onPush(e.target.checked)} />
+            Push notifications
+          </label>
+        )}
+        {push && !pushCapable && <span className="faint small">The card doesn't declare push notifications.</span>}
         {agent.busy ? (
           <button type="button" className="button" onClick={onStop}>
             Stop
@@ -429,6 +377,11 @@ function Composer({ agent, contextId, onSend, onStop }: Pick<Props, 'agent' | 'o
           </button>
         )}
       </div>
+      {push && webhookWarning && (
+        <p role="note" className="note">
+          {webhookWarning}
+        </p>
+      )}
     </form>
   );
 }

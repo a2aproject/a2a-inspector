@@ -19,9 +19,8 @@ const keyStep = 16;
 const largeKeyStep = 64;
 
 /**
- * The way the divider can still move when the panel is at a limit, for a one-way resize cursor as
- * in VS Code: at its minimum a panel can only grow (dragging further closes it), at its maximum
- * only shrink.
+ * The way the divider can still move when the panel is at a limit, for a one-way resize cursor:
+ * at its minimum a panel can only grow (dragging further closes it), at its maximum only shrink.
  */
 function limitDirection(side: Side, width: number): 'e' | 'w' | undefined {
   const { min, max } = panelLimits[side];
@@ -43,8 +42,8 @@ function setDragCursor(direction: 'e' | 'w' | undefined) {
  * pattern: arrow keys resize, Home and End go to the limits, Enter closes the panel. Double-click
  * restores the initial width.
  *
- * As with VS Code's sidebar, dragging the panel below half its minimum width closes it, and dragging
- * back during the same drag reopens it. A panel closed this way keeps the width it had before the drag.
+ * Dragging the panel below half its minimum width closes it, and dragging back during the same
+ * drag reopens it. A panel closed this way keeps the width it had before the drag.
  */
 export function ResizeHandle({ side, width, label, controls, onResize, onReset, onClose, onOpen }: Props) {
   const { min, max } = panelLimits[side];

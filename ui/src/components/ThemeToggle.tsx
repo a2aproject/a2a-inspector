@@ -16,7 +16,7 @@ function savedTheme(): Theme {
 }
 
 /**
- * Cycles the color theme auto -> light -> dark, as the a2a-itk dashboard does. `auto` follows
+ * Cycles the color theme auto -> light -> dark. `auto` follows
  * `prefers-color-scheme`; the choice is set as `data-theme` on <html>, which public/theme.js
  * also does before the first paint.
  */

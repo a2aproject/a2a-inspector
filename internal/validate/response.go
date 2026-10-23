@@ -2,6 +2,7 @@ package validate
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -21,6 +22,16 @@ const (
 	// StreamResponse is one event of a stream: a Task, a Message, a status
 	// update or an artifact update.
 	StreamResponse PayloadKind = "StreamResponse"
+	// Task is the result of GetTask and CancelTask.
+	Task PayloadKind = "Task"
+	// ListTasksResponse is the result of ListTasks, which v0.3 doesn't have.
+	ListTasksResponse PayloadKind = "ListTasksResponse"
+	// TaskPushNotificationConfig is the result of creating or getting a push
+	// notification config.
+	TaskPushNotificationConfig PayloadKind = "TaskPushNotificationConfig"
+	// ListTaskPushNotificationConfigsResponse is the result of listing a
+	// task's push notification configs.
+	ListTaskPushNotificationConfigsResponse PayloadKind = "ListTaskPushNotificationConfigsResponse"
 )
 
 // PayloadInput tells Payload how to read an agent response.
@@ -33,6 +44,7 @@ type PayloadInput struct {
 // v03Kinds maps the kind discriminator of v0.3 JSON-RPC results to their
 // schema definitions, per payload kind.
 var v03Kinds = map[PayloadKind][]string{
+	Task:                {"task"},
 	SendMessageResponse: {"task", "message"},
 	StreamResponse:      {"task", "message", "status-update", "artifact-update"},
 }
@@ -42,6 +54,19 @@ var v03Definitions = map[string]string{
 	"message":         "Message",
 	"status-update":   "TaskStatusUpdateEvent",
 	"artifact-update": "TaskArtifactUpdateEvent",
+}
+
+// v03Untagged maps payload kinds without a kind discriminator to their v0.3
+// schema definitions.
+var v03Untagged = map[PayloadKind]string{
+	TaskPushNotificationConfig: "TaskPushNotificationConfig",
+	// v0.3 JSON-RPC returns the configs as a bare array.
+	ListTaskPushNotificationConfigsResponse: "ListTaskPushNotificationConfigSuccessResponse/properties/result",
+}
+
+// v03ProtoNames maps payload kinds to v0.3 proto messages where the names differ.
+var v03ProtoNames = map[PayloadKind]string{
+	ListTaskPushNotificationConfigsResponse: "ListTaskPushNotificationConfigResponse",
 }
 
 // Payload validates an agent response as it arrived on the wire: the result
@@ -56,22 +81,29 @@ func Payload(raw []byte, in PayloadInput) Report {
 	if err != nil {
 		return newReport([]Finding{{Severity: SeverityError, Rule: "json", Message: "The payload isn't valid JSON: " + err.Error()}})
 	}
-	if _, ok := doc.(map[string]any); !ok {
+	v03JSONRPC := in.ProtocolVersion != agents.Version10 && agents.CoreBinding(in.Binding) == agents.BindingJSONRPC
+	if _, ok := doc.(map[string]any); !ok && !(v03JSONRPC && in.Kind == ListTaskPushNotificationConfigsResponse) {
 		return newReport([]Finding{{Severity: SeverityError, Rule: "object", Message: "The payload must be a JSON object."}})
 	}
 	switch {
 	case in.ProtocolVersion == agents.Version10:
 		return newReport(checkV10(raw, doc, "lf.a2a.v1."+string(in.Kind), false))
-	case agents.CoreBinding(in.Binding) == agents.BindingJSONRPC:
+	case v03JSONRPC:
 		return newReport(checkV03Result(doc, in.Kind))
 	default:
-		return newReport(checkV03Proto(raw, doc, "a2a.v1."+string(in.Kind)))
+		return newReport(checkV03Proto(raw, doc, "a2a.v1."+cmp.Or(v03ProtoNames[in.Kind], string(in.Kind))))
 	}
 }
 
 func checkV03Result(doc any, kind PayloadKind) []Finding {
+	allowed, tagged := v03Kinds[kind]
+	if !tagged {
+		if def, ok := v03Untagged[kind]; ok {
+			return schemaFindings(v03Schema(def), doc)
+		}
+		return []Finding{{Severity: SeverityInfo, Rule: "operation-version", Message: fmt.Sprintf("v0.3 JSON-RPC has no %s, so the response isn't checked.", kind)}}
+	}
 	obj := doc.(map[string]any)
-	allowed := v03Kinds[kind]
 	k, _ := obj["kind"].(string)
 	if !slices.Contains(allowed, k) {
 		msg := fmt.Sprintf("Expected \"kind\" to be %s.", quoteList(allowed))
@@ -80,11 +112,7 @@ func checkV03Result(doc any, kind PayloadKind) []Finding {
 		}
 		return []Finding{{Severity: SeverityError, Path: "kind", Rule: "kind", Message: msg}}
 	}
-	var out []Finding
-	for _, e := range schemaErrors(v03Schema(v03Definitions[k]), doc) {
-		out = append(out, e.findings()...)
-	}
-	return out
+	return schemaFindings(v03Schema(v03Definitions[k]), doc)
 }
 
 func formatJSON(v any) string {

@@ -19,8 +19,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Transport adds a protocol binding beyond the core ones, such as an
-// internal RPC system.
+// Transport adds a protocol binding beyond the core ones.
 type Transport struct {
 	// Binding is the protocolBinding value cards use for it.
 	Binding string

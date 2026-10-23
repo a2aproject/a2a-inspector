@@ -1,6 +1,6 @@
 // Package inspector runs the A2A Inspector. The a2a-inspector command calls
-// Main with no options; other builds, such as an internal one, call it with
-// extra transports and hooks instead of patching the inspector.
+// Main with no options; a program that embeds the inspector can pass extra
+// transports and an HTTP hook.
 package inspector
 
 import (
@@ -17,20 +17,20 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// Options configures the inspector. The zero value is the open-source build.
+// Options configures the inspector. The zero value uses only the built-in
+// transports.
 type Options struct {
 	// Transports adds protocol bindings beyond JSON-RPC, HTTP+JSON and gRPC.
 	Transports []Transport
 	// WrapHTTPTransport, if set, wraps the transport that sends the
-	// inspector's HTTP requests to agents, for example to add credentials
-	// for an authenticating proxy. The traffic log shows requests as they
-	// are before it.
+	// inspector's HTTP requests to agents. The traffic log shows requests as
+	// they are before it.
 	WrapHTTPTransport func(http.RoundTripper) http.RoundTripper
 }
 
-// Transport is a protocol binding a build adds, such as an internal RPC
-// system. The inspector can't record its traffic, so it shows responses as
-// a2a-go decoded them.
+// Transport adds a protocol binding beyond JSON-RPC, HTTP+JSON and gRPC.
+// The inspector can't record its traffic, so it shows responses as a2a-go
+// decoded them.
 type Transport struct {
 	// Protocol is the protocolBinding value cards use for the binding, and
 	// the value of --transport that selects it.

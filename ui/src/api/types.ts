@@ -127,6 +127,17 @@ export interface Config {
   features: { serve: boolean; webhooks: boolean };
   /** Protocol bindings the inspector supports. */
   bindings?: string[];
+  /** Where agents send push notifications to the inspector, for this run. */
+  webhookBaseUrl?: string;
+  /** The webhook base URL from the command line, or the inspector's own address. */
+  defaultWebhookBaseUrl?: string;
+}
+
+/** A task waiting for the user, which the connection's next message continues. */
+export interface OpenTask {
+  id: string;
+  /** "input-required" or "auth-required". */
+  state: string;
 }
 
 export interface ConnectionRequest {
@@ -139,6 +150,15 @@ export interface ConnectionRequest {
   tenant?: string;
   /** Continues a conversation, for example one an earlier connection had. */
   contextId?: string;
+  openTask?: OpenTask;
+  /** The connection this one takes over from; its webhooks move to the new one. */
+  replaces?: string;
+}
+
+/** What a connection's next message continues. */
+export interface Conversation {
+  contextId?: string;
+  openTask?: OpenTask;
 }
 
 export interface Connection {
@@ -153,6 +173,7 @@ export interface Connection {
   extensions: string[];
   tenant?: string;
   contextId?: string;
+  openTask?: OpenTask;
 }
 
 export interface Attachment {
@@ -177,6 +198,10 @@ export interface SendRequest {
   rawMessage?: string;
   options?: {
     newContext?: boolean;
+    /** The message doesn't continue the open task, but stays in the conversation. */
+    newTask?: boolean;
+    /** The inspector creates a webhook and asks the agent to send push notifications to it. */
+    pushNotifications?: boolean;
     returnImmediately?: boolean;
     historyLength?: number;
     acceptedOutputModes?: string[];
@@ -189,6 +214,44 @@ export interface AgentResult {
   call: Call;
   /** The conversation the connection continues after this result. */
   contextId?: string;
+  /** The task the next message continues after this result; none when missing. */
+  openTask?: OpenTask;
+  /** The webhook the agent notifies; existing: the task already did, so no config was sent. */
+  webhook?: { id: string; url: string; existing?: boolean };
+}
+
+export interface ListTasksQuery {
+  contextId?: string;
+  /** "working", "input-required" and so on. */
+  status?: string;
+  pageSize?: number;
+  pageToken?: string;
+  historyLength?: number;
+}
+
+/** A push notification config to create: one for the inspector's own webhook, or any URL. */
+export type PushConfigRequest =
+  | { inspectorWebhook: true; id?: string }
+  | { external: { url: string; token?: string; authScheme?: string; authCredentials?: string }; id?: string };
+
+/** A push notification the inspector's webhook received. */
+export interface Notification {
+  id: string;
+  webhookId: string;
+  connectionId: string;
+  taskId?: string;
+  /** RFC 3339. */
+  time: string;
+  /** Whether the request carried the webhook's token. */
+  tokenValid: boolean;
+  tokenHeader?: string;
+  payload?: AgentPayload;
+  /** Set instead of payload when the body wasn't JSON. */
+  error?: CallError;
+  /** Secrets masked. */
+  headers: WireHeader[];
+  /** What the connection's next message continues, set when this notification changed it. */
+  conversation?: Conversation;
 }
 
 export interface WireHeader {

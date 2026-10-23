@@ -33,11 +33,35 @@ func (p *ParamsInterceptor) Before(ctx context.Context, req *a2aclient.Request) 
 		}
 	}
 	if p.Tenant != "" {
-		if r, ok := req.Payload.(*a2a.SendMessageRequest); ok {
-			r.Tenant = p.Tenant
-		}
+		setTenant(req.Payload, p.Tenant)
 	}
 	return ctx, nil, nil
+}
+
+// setTenant sets the tenant of any A2A request.
+func setTenant(payload any, tenant string) {
+	switch r := payload.(type) {
+	case *a2a.SendMessageRequest:
+		r.Tenant = tenant
+	case *a2a.GetTaskRequest:
+		r.Tenant = tenant
+	case *a2a.ListTasksRequest:
+		r.Tenant = tenant
+	case *a2a.CancelTaskRequest:
+		r.Tenant = tenant
+	case *a2a.SubscribeToTaskRequest:
+		r.Tenant = tenant
+	case *a2a.PushConfig:
+		r.Tenant = tenant
+	case *a2a.GetTaskPushConfigRequest:
+		r.Tenant = tenant
+	case *a2a.ListTaskPushConfigRequest:
+		r.Tenant = tenant
+	case *a2a.DeleteTaskPushConfigRequest:
+		r.Tenant = tenant
+	case *a2a.GetExtendedAgentCardRequest:
+		r.Tenant = tenant
+	}
 }
 
 // Compose is a message as the user wrote it in the inspector.

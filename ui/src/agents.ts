@@ -1,12 +1,44 @@
-import type { AgentInterface, AgentResult, CardResolveResponse, Connection, Finding, Preferences } from './api/types';
+import type { PushConfigView } from './a2a/view';
+import type { AgentInterface, AgentResult, CardResolveResponse, Connection, Finding, ListTasksQuery, OpenTask, Preferences } from './api/types';
 import { type ConnectionSettings, defaultSettings, preferredInterface } from './settings';
 
 /** One line of the chat with an agent. */
 export type ChatItem =
-  | { id: string; type: 'user'; text: string; attachments: string[]; raw?: string; stream: boolean; time: number }
+  | { id: string; type: 'user'; text: string; attachments: string[]; raw?: string; data?: unknown; stream: boolean; time: number }
   | { id: string; type: 'result'; result: AgentResult; binding: string; time: number }
   | { id: string; type: 'error'; message: string; time: number }
   | { id: string; type: 'note'; message: string; time: number };
+
+/** An entry in a task's activity: the result of an operation on it, or a note. */
+export type TaskActivity =
+  | { id: string; type: 'result'; label: string; result: AgentResult; binding: string; time: number }
+  | { id: string; type: 'error'; label: string; message: string; time: number }
+  | { id: string; type: 'note'; message: string; time: number };
+
+/** A task of the agent's that the UI saw in a result. */
+export interface TaskEntry {
+  id: string;
+  /** Lower case with dashes: "input-required". */
+  state?: string;
+  contextId?: string;
+  /** When the state was last seen, in ms. */
+  updated: number;
+  /** Results of operations on the task, oldest first. */
+  activity: TaskActivity[];
+  /** Push notification configs the agent returned for the task. */
+  configs: PushConfigView[];
+  /** A SubscribeToTask stream is open. */
+  subscribed: boolean;
+}
+
+/** The latest Get or List result from the Tasks tab's toolbar that isn't shown with a task. */
+export interface TaskLookup {
+  activity: TaskActivity;
+  /** The List request, for its next page. */
+  query?: ListTasksQuery;
+}
+
+export type ExtendedCardState = { state: 'loading' } | { state: 'done'; result: AgentResult } | { state: 'failed'; error: string };
 
 /** An agent added in this browser session. */
 export interface AgentEntry {
@@ -34,6 +66,17 @@ export interface AgentEntry {
   busy: boolean;
   /** The next message starts a new conversation. */
   resetContext?: boolean;
+  /** The next message starts a new task instead of continuing the open one. */
+  newTask?: boolean;
+  /** Every connection the agent has had, to match notifications to it. */
+  connectionIds: string[];
+  tasks: TaskEntry[];
+  /** The task shown expanded in the Tasks tab. */
+  selectedTask?: string;
+  taskLookup?: TaskLookup;
+  /** Values of forms the user submitted, by form key. */
+  forms: Record<string, Record<string, unknown>>;
+  extendedCard?: ExtendedCardState;
 }
 
 /** The card's interfaces followed by the custom ones. */
@@ -68,7 +111,23 @@ export type AgentsAction =
   | { type: 'disconnected'; id: string }
   | { type: 'chat'; id: string; item: ChatItem }
   | { type: 'busy'; id: string; busy: boolean }
-  | { type: 'contextId'; id: string; contextId: string | undefined; reset?: boolean };
+  /**
+   * The conversation after a result. "send" results answer the next message the user sent; others,
+   * from task operations and notifications, don't undo "New conversation" or "New task".
+   */
+  | { type: 'conversation'; id: string; contextId?: string; openTask?: OpenTask; source: 'send' | 'other' }
+  /** The same from the notifications feed, which names the connection instead of the agent. */
+  | { type: 'notificationConversation'; connectionId: string; contextId?: string; openTask?: OpenTask }
+  | { type: 'newConversation'; id: string }
+  | { type: 'newTask'; id: string }
+  /** Records what a result says about a task, and adds an entry to its activity. */
+  | { type: 'task'; id: string; taskId: string; state?: string; contextId?: string; time: number; activity?: TaskActivity; select?: boolean }
+  | { type: 'selectTask'; id: string; taskId: string | undefined }
+  | { type: 'subscribed'; id: string; taskId: string; subscribed: boolean }
+  | { type: 'pushConfigs'; id: string; taskId: string; replace?: PushConfigView[]; upsert?: PushConfigView; remove?: string }
+  | { type: 'taskLookup'; id: string; lookup: TaskLookup | undefined }
+  | { type: 'formSubmitted'; id: string; key: string; values: Record<string, unknown> }
+  | { type: 'extendedCard'; id: string; value: ExtendedCardState };
 
 function newEntry(id: string, url: string, kind: AgentEntry['kind'], settings?: ConnectionSettings): AgentEntry {
   return {
@@ -81,6 +140,9 @@ function newEntry(id: string, url: string, kind: AgentEntry['kind'], settings?: 
     settings: settings ?? defaultSettings,
     chat: [],
     busy: false,
+    connectionIds: [],
+    tasks: [],
+    forms: {},
   };
 }
 
@@ -94,6 +156,33 @@ export function findAgent(agents: AgentEntry[], url: string): AgentEntry | undef
 
 function patch(agents: AgentEntry[], id: string, change: Partial<AgentEntry>): AgentEntry[] {
   return agents.map((a) => (a.id === id ? { ...a, ...change } : a));
+}
+
+function emptyTask(id: string): TaskEntry {
+  return { id, updated: 0, activity: [], configs: [], subscribed: false };
+}
+
+/** Changes the agent's task, adding it first if it's new. */
+function patchTask(agents: AgentEntry[], id: string, taskId: string, change: (t: TaskEntry) => TaskEntry): AgentEntry[] {
+  return agents.map((a) => {
+    if (a.id !== id) return a;
+    const exists = a.tasks.some((t) => t.id === taskId);
+    const tasks = exists ? a.tasks : [...a.tasks, emptyTask(taskId)];
+    return { ...a, tasks: tasks.map((t) => (t.id === taskId ? change(t) : t)) };
+  });
+}
+
+/** Applies the conversation a result or notification reports. */
+function conversation(a: AgentEntry, contextId: string | undefined, openTask: OpenTask | undefined, source: 'send' | 'other'): AgentEntry {
+  if (!a.connection) return a;
+  if (source === 'other' && a.resetContext) return a;
+  const connection = { ...a.connection, contextId, openTask };
+  if (source === 'send') {
+    return { ...a, connection, resetContext: false, newTask: false };
+  }
+  // A task operation can report the open task the user just chose not to continue.
+  const moved = !!openTask && openTask.id !== a.connection.openTask?.id;
+  return { ...a, connection, newTask: moved ? false : a.newTask };
 }
 
 function resolvedEntry(result: CardResolveResponse, previous: AgentEntry): Partial<AgentEntry> {
@@ -188,11 +277,19 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
     }
     case 'settings':
       return { ...state, agents: patch(state.agents, action.id, { settings: action.settings }) };
-    case 'connected':
+    case 'connected': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry) return state;
       return {
         ...state,
-        agents: patch(state.agents, action.id, { connection: action.connection, connectionKey: action.key, settings: action.settings }),
+        agents: patch(state.agents, action.id, {
+          connection: action.connection,
+          connectionKey: action.key,
+          settings: action.settings,
+          connectionIds: [...entry.connectionIds, action.connection.id],
+        }),
       };
+    }
     case 'disconnected':
       return { ...state, agents: patch(state.agents, action.id, { connection: undefined, connectionKey: undefined }) };
     case 'chat': {
@@ -202,17 +299,68 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
     }
     case 'busy':
       return { ...state, agents: patch(state.agents, action.id, { busy: action.busy }) };
-    case 'contextId': {
+    case 'conversation':
+      return {
+        ...state,
+        agents: state.agents.map((a) => (a.id === action.id ? conversation(a, action.contextId, action.openTask, action.source) : a)),
+      };
+    case 'notificationConversation':
+      return {
+        ...state,
+        agents: state.agents.map((a) =>
+          a.connection?.id === action.connectionId ? conversation(a, action.contextId, action.openTask, 'other') : a,
+        ),
+      };
+    case 'newConversation': {
       const entry = state.agents.find((a) => a.id === action.id);
       if (!entry) return state;
       return {
         ...state,
         agents: patch(state.agents, action.id, {
-          connection: entry.connection && { ...entry.connection, contextId: action.contextId },
-          resetContext: action.reset ?? false,
+          connection: entry.connection && { ...entry.connection, contextId: undefined, openTask: undefined },
+          resetContext: true,
+          newTask: false,
         }),
       };
     }
+    case 'newTask':
+      return { ...state, agents: patch(state.agents, action.id, { newTask: true }) };
+    case 'task': {
+      const agents = patchTask(state.agents, action.id, action.taskId, (t) => ({
+        ...t,
+        ...(action.state ? { state: action.state, updated: action.time } : {}),
+        contextId: action.contextId ?? t.contextId,
+        activity: action.activity ? [...t.activity, action.activity] : t.activity,
+      }));
+      return { ...state, agents: action.select ? patch(agents, action.id, { selectedTask: action.taskId }) : agents };
+    }
+    case 'selectTask':
+      return { ...state, agents: patch(state.agents, action.id, { selectedTask: action.taskId }) };
+    case 'subscribed':
+      return { ...state, agents: patchTask(state.agents, action.id, action.taskId, (t) => ({ ...t, subscribed: action.subscribed })) };
+    case 'pushConfigs':
+      return {
+        ...state,
+        agents: patchTask(state.agents, action.id, action.taskId, (t) => {
+          let configs = action.replace ?? t.configs;
+          const { upsert, remove } = action;
+          if (upsert) {
+            const i = upsert.id === undefined ? -1 : configs.findIndex((c) => c.id === upsert.id);
+            configs = i < 0 ? [...configs, upsert] : configs.map((c, j) => (j === i ? upsert : c));
+          }
+          if (remove !== undefined) configs = configs.filter((c) => c.id !== remove);
+          return { ...t, configs };
+        }),
+      };
+    case 'taskLookup':
+      return { ...state, agents: patch(state.agents, action.id, { taskLookup: action.lookup }) };
+    case 'formSubmitted': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry) return state;
+      return { ...state, agents: patch(state.agents, action.id, { forms: { ...entry.forms, [action.key]: action.values } }) };
+    }
+    case 'extendedCard':
+      return { ...state, agents: patch(state.agents, action.id, { extendedCard: action.value }) };
   }
 }
 

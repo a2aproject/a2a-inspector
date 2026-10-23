@@ -72,18 +72,24 @@ func errorFrom(err error) *callError {
 // jsonrpcError describes the error object of a JSON-RPC response.
 func jsonrpcError(raw json.RawMessage) *callError {
 	var e struct {
-		Code    *int   `json:"code"`
-		Message string `json:"message"`
+		Code    *int            `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	}
 	var decoded any
 	_ = json.Unmarshal(raw, &decoded)
-	ce := &callError{Raw: decoded}
+	ce := &callError{Raw: decoded, rejected: true}
 	if err := json.Unmarshal(raw, &e); err != nil || e.Code == nil {
 		ce.Message = "The agent sent a malformed JSON-RPC error."
 		return ce
 	}
 	ce.Code = *e.Code
 	ce.A2AError = jsonrpcErrorNames[*e.Code]
+	if ce.A2AError == "" {
+		// Errors without a code of their own, such as authentication
+		// errors, can still name themselves with an ErrorInfo reason.
+		ce.A2AError = detailsReason(e.Data)
+	}
 	ce.Message = e.Message
 	if ce.Message == "" {
 		ce.Message = fmt.Sprintf("JSON-RPC error %d.", *e.Code)
@@ -95,7 +101,7 @@ func jsonrpcError(raw json.RawMessage) *callError {
 // HTTP+JSON stream when status is 0. A2A's HTTP+JSON binding sends errors as
 // {"error": {"code", "status", "message", "details"}}.
 func httpError(status int, body []byte, err error) *callError {
-	ce := &callError{Code: status, A2AError: a2aErrorName(err)}
+	ce := &callError{Code: status, A2AError: a2aErrorName(err), rejected: true}
 	var decoded any
 	if json.Unmarshal(body, &decoded) == nil {
 		ce.Raw = decoded
@@ -104,27 +110,43 @@ func httpError(status int, body []byte, err error) *callError {
 	}
 	var e struct {
 		Error struct {
-			Message string `json:"message"`
-			Details []struct {
-				Reason string `json:"reason"`
-			} `json:"details"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &e) == nil {
 		ce.Message = e.Error.Message
 		if ce.A2AError == "" {
-			for _, d := range e.Error.Details {
-				if d.Reason != "" {
-					ce.A2AError = reasonName(d.Reason)
-					break
-				}
-			}
+			ce.A2AError = detailsReason(e.Error.Details)
 		}
 	}
 	if ce.Message == "" && status != 0 {
 		ce.Message = fmt.Sprintf("The agent answered %d %s.", status, http.StatusText(status))
 	}
 	return ce
+}
+
+type errorDetail struct {
+	Reason string `json:"reason"`
+}
+
+// detailsReason names an error after the first ErrorInfo reason in its
+// details: a list, or a single object as some v0.3 agents send.
+func detailsReason(raw json.RawMessage) string {
+	var details []errorDetail
+	if json.Unmarshal(raw, &details) != nil {
+		var one errorDetail
+		if json.Unmarshal(raw, &one) != nil {
+			return ""
+		}
+		details = []errorDetail{one}
+	}
+	for _, d := range details {
+		if d.Reason != "" {
+			return reasonName(d.Reason)
+		}
+	}
+	return ""
 }
 
 // reasonName turns an ErrorInfo reason such as "TASK_NOT_FOUND" into

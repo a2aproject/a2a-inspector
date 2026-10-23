@@ -71,9 +71,13 @@ type connectionRequest struct {
 	Extensions    []string          `json:"extensions,omitempty"`
 	ServiceParams map[string]string `json:"serviceParams,omitempty"`
 	Tenant        string            `json:"tenant,omitempty"`
-	// ContextID continues a conversation, for example one an earlier
-	// connection to the agent had.
-	ContextID string `json:"contextId,omitempty"`
+	// ContextID and OpenTask continue a conversation, for example one an
+	// earlier connection to the agent had.
+	ContextID string     `json:"contextId,omitempty"`
+	OpenTask  *taskState `json:"openTask,omitempty"`
+	// Replaces is the connection this one takes over from, for example
+	// after a settings change. Its webhooks move to the new connection.
+	Replaces string `json:"replaces,omitempty"`
 }
 
 type connectionResponse struct {
@@ -89,8 +93,17 @@ type connectionResponse struct {
 	Headers             []headerView       `json:"headers"`
 	Extensions          []string           `json:"extensions"`
 	Tenant              string             `json:"tenant,omitempty"`
-	// ContextID is the conversation the next message continues.
-	ContextID string `json:"contextId,omitempty"`
+	// ContextID is the conversation the next message continues, and
+	// OpenTask the task it continues.
+	ContextID string     `json:"contextId,omitempty"`
+	OpenTask  *taskState `json:"openTask,omitempty"`
+}
+
+// taskState is a task waiting for the user, which the next message continues.
+type taskState struct {
+	ID string `json:"id"`
+	// State is "input-required" or "auth-required".
+	State string `json:"state"`
 }
 
 // connection is an a2a-go client for one interface of an agent, with the
@@ -104,29 +117,59 @@ type connection struct {
 
 	mu        sync.Mutex
 	contextID string
+	openTask  *taskState
 }
 
 func (c *connection) response() connectionResponse {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	v := c.view
-	v.ContextID = c.contextID
+	v.ContextID, v.OpenTask = c.conversation()
 	return v
 }
 
-func (c *connection) setContextID(id string) {
-	if id == "" {
-		return
-	}
-	c.mu.Lock()
-	c.contextID = id
-	c.mu.Unlock()
-}
-
-func (c *connection) currentContextID() string {
+// conversation returns the context and the open task the next message continues.
+func (c *connection) conversation() (string, *taskState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.contextID
+	return c.contextID, c.openTask
+}
+
+// reset forgets the open task, and with newContext the context too.
+func (c *connection) reset(newContext bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.openTask = nil
+	if newContext {
+		c.contextID = ""
+	}
+}
+
+// observe follows the conversation through a payload the agent sent. Replies
+// to the conversation's own messages (own) set its context. A task waiting
+// for the user becomes the open task, if it's in the conversation's context;
+// the open task closes when it moves on.
+func (c *connection) observe(raw json.RawMessage, own bool) {
+	ref := taskRefOf(raw)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if own && ref.ContextID != "" {
+		c.contextID = ref.ContextID
+	}
+	switch {
+	case ref.ID == "" || ref.State == "":
+	case (ref.State == "input-required" || ref.State == "auth-required") && (own || ref.ContextID == c.contextID):
+		c.openTask = &taskState{ID: ref.ID, State: ref.State}
+	case c.openTask != nil && c.openTask.ID == ref.ID:
+		c.openTask = nil
+	}
+}
+
+// settle follows the conversation through a result, and records in the
+// result what the next message continues.
+func (c *connection) settle(res *agentResult, own bool) {
+	if res.Payload != nil {
+		c.observe(res.Payload.Raw, own)
+	}
+	res.ContextID, res.OpenTask = c.conversation()
 }
 
 // binding returns the canonical binding and version of the connection.
@@ -155,6 +198,12 @@ func (cs *connections) get(id string) (*connection, bool) {
 	defer cs.mu.Unlock()
 	c, ok := cs.items[id]
 	return c, ok
+}
+
+func (cs *connections) all() []*connection {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return slices.Collect(maps.Values(cs.items))
 }
 
 func (cs *connections) remove(id string) (*connection, bool) {
@@ -425,7 +474,13 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 	}
 	conn.client = client
 	conn.contextID = req.ContextID
+	if req.OpenTask != nil && req.OpenTask.ID != "" {
+		conn.openTask = req.OpenTask
+	}
 	s.conns.add(conn)
+	if req.Replaces != "" {
+		s.hooks.move(req.Replaces, conn.view.ID)
+	}
 	writeJSON(w, http.StatusCreated, conn.response())
 }
 

@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
-import { type AgentEntry, countFindings, describeCounts, interfacesOf } from '../agents';
+import { type AgentEntry, countFindings, describeCounts, type ExtendedCardState, interfacesOf } from '../agents';
 import type { AgentInterface, CallError, CardResolveResponse } from '../api/types';
 import { safeHref, summarizeCard } from '../card';
 import type { ConnectionSettings as Settings } from '../settings';
+import { TrafficLink } from './AgentEvent';
 import { ConnectionSettings } from './ConnectionSettings';
+import { FindingList } from './FindingList';
 import { InterfacePicker } from './InterfacePicker';
 
 interface Props {
@@ -16,6 +18,8 @@ interface Props {
   onAddInterface: (iface: AgentInterface) => void;
   onRemoveInterface: (index: number) => void;
   onSettings: (settings: Settings) => void;
+  onFetchExtendedCard: () => void;
+  onShowTraffic: (entryId: string) => void;
 }
 
 export function CardView(props: Props) {
@@ -100,7 +104,7 @@ function CardContent(props: Props) {
       </>
     );
   }
-  return <CardOverview agent={agent} result={result} connect={connect} />;
+  return <CardOverview {...props} agent={agent} result={result} connect={connect} />;
 }
 
 function CallFailure({ result, error }: { result: CardResolveResponse; error: CallError | null }) {
@@ -137,7 +141,13 @@ function YesNo({ value }: { value: boolean }) {
   return <>{value ? 'Yes' : 'No'}</>;
 }
 
-function CardOverview({ agent, result, connect }: { agent: AgentEntry; result: CardResolveResponse; connect: ReactNode }) {
+function CardOverview({
+  agent,
+  result,
+  connect,
+  onFetchExtendedCard,
+  onShowTraffic,
+}: Props & { agent: AgentEntry; result: CardResolveResponse; connect: ReactNode }) {
   const payload = result.payload!;
   const card = summarizeCard(payload.raw, payload.protocolVersion);
   const counts = countFindings(payload.validation.findings);
@@ -198,7 +208,10 @@ function CardOverview({ agent, result, connect }: { agent: AgentEntry; result: C
           </dd>
           <dt>Extended card</dt>
           <dd>
-            <YesNo value={card.extendedCard} />
+            <YesNo value={card.extendedCard} />{' '}
+            <button type="button" className="link-button" onClick={onFetchExtendedCard} disabled={agent.extendedCard?.state === 'loading'}>
+              {agent.extendedCard ? 'Fetch again' : 'Fetch'}
+            </button>
           </dd>
           <dt>Input modes</dt>
           <dd>{card.defaultInputModes.join(', ') || '—'}</dd>
@@ -206,6 +219,8 @@ function CardOverview({ agent, result, connect }: { agent: AgentEntry; result: C
           <dd>{card.defaultOutputModes.join(', ') || '—'}</dd>
         </dl>
       </section>
+
+      {agent.extendedCard && <ExtendedCard id={agent.id} state={agent.extendedCard} onShowTraffic={onShowTraffic} />}
 
       {card.extensions.length > 0 && (
         <section className="card" aria-labelledby={`${agent.id}-extensions`}>
@@ -276,5 +291,79 @@ function CardOverview({ agent, result, connect }: { agent: AgentEntry; result: C
         <pre>{JSON.stringify(payload.raw, null, 2)}</pre>
       </details>
     </article>
+  );
+}
+
+/** The extended agent card the agent returned, with its validation. */
+function ExtendedCard({ id, state, onShowTraffic }: { id: string; state: ExtendedCardState; onShowTraffic: (entryId: string) => void }) {
+  let body: ReactNode;
+  if (state.state === 'loading') {
+    body = (
+      <p role="status" className="faint small">
+        Fetching the extended card…
+      </p>
+    );
+  } else if (state.state === 'failed') {
+    body = (
+      <p role="alert" className="notice notice-error small">
+        {state.error}
+      </p>
+    );
+  } else {
+    const { result } = state;
+    const { payload, call } = result;
+    const error = call.error;
+    const findings = payload?.validation.findings ?? [];
+    const counts = countFindings(findings);
+    const summary = payload && summarizeCard(payload.raw, payload.protocolVersion);
+    body = (
+      <>
+        {error || !payload ? (
+          <div className="notice notice-error small">
+            <p>
+              {error?.a2aError && <strong>{error.a2aError}: </strong>}
+              {error?.message ?? 'The agent sent no card.'}
+            </p>
+            {error?.raw !== undefined && error.raw !== null && (
+              <details>
+                <summary>As sent by the agent</summary>
+                <pre>{typeof error.raw === 'string' ? error.raw : JSON.stringify(error.raw, null, 2)}</pre>
+              </details>
+            )}
+          </div>
+        ) : (
+          <>
+            <p className="meta">
+              <strong>{summary?.name || 'Unnamed agent'}</strong>
+              {summary?.version && <span>Version {summary.version}</span>}
+              <span className="pill">Card v{payload.protocolVersion}</span>
+              <span className={counts.errors ? 'chip chip-fail' : counts.warnings ? 'chip chip-mixed' : 'chip chip-pass'}>{describeCounts(counts)}</span>
+            </p>
+            {summary?.description && <p>{summary.description}</p>}
+            <p className="small">
+              {summary?.skills.length ?? 0} skill{summary?.skills.length === 1 ? '' : 's'}
+              {summary?.skills.length ? `: ${summary.skills.map((s) => s.name || s.id).join(', ')}` : ''}
+            </p>
+            {findings.length > 0 && <FindingList findings={findings} />}
+          </>
+        )}
+        {call.findings && call.findings.length > 0 && <FindingList findings={call.findings} />}
+        {payload && (
+          <details>
+            <summary>Raw extended card JSON</summary>
+            <pre>{JSON.stringify(payload.raw, null, 2)}</pre>
+          </details>
+        )}
+        <p className="faint small">
+          {call.latencyMs} ms <TrafficLink result={result} onShowTraffic={onShowTraffic} />
+        </p>
+      </>
+    );
+  }
+  return (
+    <section className="card" aria-labelledby={`${id}-extended`}>
+      <h3 id={`${id}-extended`}>Extended card</h3>
+      {body}
+    </section>
   );
 }
