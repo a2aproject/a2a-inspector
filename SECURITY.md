@@ -1,7 +1,3 @@
 # Security Policy
 
-To report a security issue, please use [g.co/vulnz](https://g.co/vulnz).
-
-The Google Security Team will respond within 5 working days of your report on g.co/vulnz.
-
-We use g.co/vulnz for our intake, and do coordination and disclosure here using GitHub Security Advisory to privately discuss and fix the issue.
+To report a security issue, privately contact our moderators or an A2A TSC member on our [Discord server](https://discord.com/invite/9UpukKSpRN) for faster review. Do not open a public issue.
