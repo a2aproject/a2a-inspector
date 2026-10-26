@@ -1,43 +1,50 @@
-name: Inspector v2 (Go and UI)
+name: CI
 
 on:
   pull_request:
     branches: [main, epic/inspector-v2]
   push:
-    branches: [epic/inspector-v2]
+    branches: [main, epic/inspector-v2]
 
 permissions:
   contents: read
 
 jobs:
   go:
-    name: Go build, vet and test
+    name: Go build and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          # go vet's stdversion check flags standard library APIs newer than go.mod's go version.
           go-version: stable
+
+      - name: Tidy
+        run: go mod tidy -diff
 
       - name: Build
         run: go build ./...
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Run gofmt -w on:"
-            echo "$unformatted"
-            exit 1
-          fi
-
       - name: Test
         run: go test -race ./...
+
+  lint:
+    # The check name main's branch protection requires.
+    name: Lint Code Base
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        with:
+          install-mode: goinstall
+          version: 8f3b0c7ed018e57905fbd873c697e0b1ede605a5 # v2.11.4
 
   ui:
     name: UI lint, type check, test and build
@@ -46,11 +53,11 @@ jobs:
       run:
         working-directory: ui
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: ui/package-lock.json
 

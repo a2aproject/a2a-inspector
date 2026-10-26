@@ -1,3 +1,17 @@
+// Copyright 2026 The A2A Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package inspector
 
 import (
@@ -113,7 +127,7 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || len(resp.Cookies()) != 1 {
 		t.Fatalf("GET start URL = %d with cookies %v", resp.StatusCode, resp.Cookies())
 	}
@@ -125,7 +139,7 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var config struct {
 		AgentCardURL          string `json:"agentCardUrl"`
 		WebhookBaseURL        string `json:"webhookBaseUrl"`
@@ -145,7 +159,7 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 		t.Errorf("GET / = %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
@@ -172,7 +186,7 @@ func TestStopWithIdleConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	time.Sleep(100 * time.Millisecond)
 
 	r.cancel()
@@ -190,8 +204,8 @@ func TestNoOpen(t *testing.T) {
 	r := start(t, "--port", "0", "--no-open")
 	r.waitForURL(t)
 	select {
-	case url := <-r.opened:
-		t.Errorf("opened %q with --no-open", url)
+	case opened := <-r.opened:
+		t.Errorf("opened %q with --no-open", opened)
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -201,7 +215,7 @@ func TestPortInUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
@@ -236,8 +250,8 @@ func TestDefaults(t *testing.T) {
 
 func TestNetworkWarning(t *testing.T) {
 	r := start(t, "--host", "0.0.0.0", "--port", "0", "--no-open")
-	if url := r.waitForURL(t); !strings.HasPrefix(url, "http://127.0.0.1:") {
-		t.Errorf("URL = %q, want the loopback address", url)
+	if u := r.waitForURL(t); !strings.HasPrefix(u, "http://127.0.0.1:") {
+		t.Errorf("URL = %q, want the loopback address", u)
 	}
 	if !strings.Contains(r.stderr.String(), "Warning: listening on 0.0.0.0") {
 		t.Errorf("stderr = %q, want a warning", r.stderr.String())

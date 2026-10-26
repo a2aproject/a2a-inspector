@@ -1,3 +1,17 @@
+// Copyright 2026 The A2A Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package traffic
 
 import (
@@ -171,7 +185,7 @@ func TestTransportOverrideAfterRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if got != `{"message":{"raw":1}}` {
 		t.Errorf("the agent got %s after the redirect, want the raw message", got)
 	}
@@ -208,7 +222,7 @@ func TestTransport(t *testing.T) {
 	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), "data: two") {
 		t.Errorf("the client got %q, want the whole stream", body)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if diff := cmp.Diff([]string{"one", "two"}, frames); diff != "" {
 		t.Errorf("frames (-want +got) diff = %s", diff)
 	}
@@ -229,7 +243,7 @@ func TestTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	e, _ = l.Get(call.LastEntryID())
 	if !e.Done() || e.HTTP.Status != http.StatusTeapot || e.HTTP.ResponseBody != `{"error":{"message":"no"}}` {
 		t.Errorf("entry = %+v", e.HTTP)

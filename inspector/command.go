@@ -1,3 +1,17 @@
+// Copyright 2026 The A2A Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package inspector
 
 import (
@@ -38,7 +52,7 @@ type flags struct {
 	webhookURL string
 }
 
-func newCommand(opts Options, stdout, stderr io.Writer, open func(url string) error) *cobra.Command {
+func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string) error) *cobra.Command {
 	var f flags
 	cmd := &cobra.Command{
 		Use:   "a2a-inspector",
@@ -88,21 +102,21 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	sopts.Host, sopts.Port, sopts.Token, sopts.UI = f.host, port, token, ui.FS()
 	handler, err := server.New(sopts)
 	if err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return err
 	}
 	defer handler.Close()
 
 	if !agents.IsLoopbackHost(f.host) {
-		fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+
+		_, _ = fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+
 			"Anyone with the URL below can use it to send requests from this machine, "+
 			"with the credentials given to it and its environment variables.\n", f.host)
 	}
 	inspectorURL := startURL(f.host, port, token)
-	fmt.Fprintf(stdout, "A2A Inspector is running at %s\nPress Ctrl+C to stop.\n", inspectorURL)
+	_, _ = fmt.Fprintf(stdout, "A2A Inspector is running at %s\nPress Ctrl+C to stop.\n", inspectorURL)
 	if !f.noOpen {
 		if err := open(inspectorURL); err != nil {
-			fmt.Fprintf(stderr, "Couldn't open a browser (%v). Open the URL above.\n", err)
+			_, _ = fmt.Fprintf(stderr, "Couldn't open a browser (%v). Open the URL above.\n", err)
 		}
 	}
 

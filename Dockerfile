@@ -1,37 +1,25 @@
-# Stage 1: Build the frontend assets
-FROM node:22-slim AS frontend-builder
-WORKDIR /app
-
-# Copy package files and configuration needed for npm ci
-COPY frontend/package*.json ./
-COPY frontend/tsconfig.json ./
-COPY frontend/src ./src
-
-# Install dependencies (this will run prepare script which needs tsconfig.json and src/)
+# Stage 1: build the UI.
+FROM node:24-slim AS ui
+WORKDIR /src/ui
+COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
-
-# Copy remaining files
-COPY frontend/ ./
-
+COPY ui/ ./
 RUN npm run build
 
-# Stage 2: Build the final application with the backend
-FROM python:3.12-slim
-WORKDIR /app
-RUN pip install uv
-COPY pyproject.toml uv.lock ./
-RUN uv sync --no-cache
-RUN uv pip install validators
-COPY backend/ ./backend/
-RUN mkdir -p /app/frontend
-COPY --from=frontend-builder /app/public /app/frontend/public
+# Stage 2: build the binary, with the UI from stage 1 embedded.
+FROM golang:1.26 AS go
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY main.go ./
+COPY inspector/ inspector/
+COPY internal/ internal/
+COPY ui/embed.go ui/
+COPY --from=ui /src/ui/dist ui/dist
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /a2a-inspector .
 
-
-WORKDIR /app/backend
-
-# Expose the port the backend server runs on
+# Stage 3: run it.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=go /a2a-inspector /a2a-inspector
 EXPOSE 8080
-
-# The command to run the server. Because our WORKDIR is now /app/backend,
-# we can simply refer to 'app:app' from the current directory.git 
-CMD ["uv", "run", "--", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["/a2a-inspector", "--host", "0.0.0.0", "--port", "8080", "--no-open"]

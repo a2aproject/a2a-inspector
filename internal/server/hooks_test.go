@@ -1,8 +1,23 @@
+// Copyright 2026 The A2A Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package server
 
 import (
 	"bufio"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +39,7 @@ func follow(t *testing.T, s *Server, rawURL string) <-chan sseEvent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s = %d", rawURL, resp.StatusCode)
 	}
@@ -82,9 +97,7 @@ func waitNotification(t *testing.T, events <-chan sseEvent, match func(notificat
 // another host and without the session cookie.
 func (s *Server) deliver(path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	h := map[string]string{"Content-Type": "application/json"}
-	for k, v := range headers {
-		h[k] = v
-	}
+	maps.Copy(h, headers)
 	return s.do(request{method: http.MethodPost, target: path, body: body, host: "agent.example:443", headers: h})
 }
 
@@ -387,7 +400,7 @@ func TestHooksFeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	for name, events := range map[string]<-chan sseEvent{"all": all, "connection": byConn} {
 		if n := waitNotification(t, events, func(notification) bool { return true }); n.TaskID != "t-2" || n.ConnectionID != other.ID {
 			t.Errorf("%s: notification = %+v", name, n)
