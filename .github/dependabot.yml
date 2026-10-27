@@ -1,11 +1,19 @@
 version: 2
 updates:
   - package-ecosystem: 'npm'
-    directory: '/frontend'
+    directory: '/ui'
     schedule:
       interval: 'monthly'
     groups:
-      npm-dependencies:
+      ui-npm-dependencies:
+        patterns:
+          - '*'
+  - package-ecosystem: 'gomod'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+    groups:
+      go-dependencies:
         patterns:
           - '*'
   - package-ecosystem: 'github-actions'
@@ -14,13 +22,5 @@ updates:
       interval: 'monthly'
     groups:
       github-actions:
-        patterns:
-          - '*'
-  - package-ecosystem: 'uv'
-    directory: '/'
-    schedule:
-      interval: 'monthly'
-    groups:
-      uv-dependencies:
         patterns:
           - '*'

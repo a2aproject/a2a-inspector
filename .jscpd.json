@@ -1,5 +1,0 @@
-{
-  "ignore": ["**/.github/**", "**/.git/**", "**/tests/**", "**/.nox/**", "**/.venv/**"],
-  "threshold": 3,
-  "reporters": ["html", "markdown"]
-}

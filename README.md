@@ -1,135 +1,88 @@
-# A2A Protocol Inspector
+# A2A Inspector
 
-The A2A Inspector is a web-based tool designed to help developers inspect, debug, and validate servers that implement the A2A (Agent2Agent) protocol. It provides a user-friendly interface to interact with an A2A agent, view communication, and ensure specification compliance.
+<div align="center" width="800">
+   <img src="https://raw.githubusercontent.com/a2aproject/A2A/refs/heads/main/docs/assets/a2a_logo/color/SVG/a2a_color.svg" width="600" alt="Agent2Agent Protocol Logo"/>
+   <h3>
+       Inspect, debug and validate A2A agents from your browser.
+   </h3>
+</div>
 
-The application is built with a FastAPI backend and a TypeScript frontend.
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/a2aproject/a2a-inspector" alt="License: Apache-2.0"></a>
+</p>
+
+The **A2A Inspector** (`a2a-inspector`) is a web-based tool for developers of [A2A (Agent2Agent) agents](https://a2a-protocol.org/latest/), maintained by the **A2A Project Team**. It's a single Go binary with the web UI embedded, and it talks to agents through [a2a-go](https://github.com/a2aproject/a2a-go).
 
 ## Features
 
-- **Connect to a local A2A Agent:** Specify the base URL of any agent server to connect (e.g., `http://localhost:5555`).
-- **View Agent Card:** Automatically fetches and displays the agent's card.
-- **Spec Compliance Checks:** Performs basic validation on the agent card to ensure it adheres to the A2A specification.
-- **Live Chat:** A chat interface to send and receive messages with the connected agent.
-- **Debug Console:** A slide-out console shows the raw JSON-RPC 2.0 messages sent and received between the inspector and the agent server.
+- **Agent cards:** fetches a card, detects whether it's v1.0 or v0.3, lists its interfaces and checks it against the specification.
+- **All bindings:** talks to agents over JSON-RPC, HTTP+JSON and gRPC, in v1.0 and v0.3, also through an interface entered by hand.
+- **Chat:** sends or streams messages with text, files, data and metadata, or a raw message. Conversations and tasks waiting for input continue across messages.
+- **Tasks and push notifications:** gets, lists, cancels and subscribes to tasks, manages push notification configs and receives notifications at its own webhook.
+- **Auth:** bearer, basic and API key presets and custom headers. Secrets stay in the inspector's backend.
+- **Traffic:** every HTTP exchange and gRPC call as it went over the wire, with each response validated.
 
-## Prerequisites
+Built on [A2A Protocol v1.0](https://a2a-protocol.org/v1.0.0/specification/), and works with v0.3 agents too.
 
-- Python 3.10+
-- [uv](https://github.com/astral-sh/uv)
-- Node.js and npm
+## Installation
 
-## Project Structure
+**From source** (Go 1.26 or later)
 
-This repository is organized into two main parts:
-
-- `./backend/`: Contains the Python FastAPI server that handles WebSocket connections and communication with the A2A agent.
-- `./frontend/`: Contains the TypeScript and CSS source files for the web interface.
-
-## Setup and Running the Application
-
-Follow these steps to get the A2A Inspector running on your local machine. The setup is a three-step process: install Python dependencies, install Node.js dependencies, and then run the two processes.
-
-### 1. Clone the repository
-
-```sh
-git clone https://github.com/a2aproject/a2a-inspector.git
-cd a2a-inspector
+```bash
+go install github.com/a2aproject/a2a-inspector@main
 ```
 
-### 2. Install Dependencies
+Or run it from a clone of this repository with `go run .`.
 
-First, install the Python dependencies for the backend from the root directory. `uv sync` reads the `uv.lock` file and installs the exact versions of the packages into a virtual environment.
+**Docker**
 
-```sh
-# Run from the root of the project
-uv sync
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/a2aproject/a2a-inspector
 ```
 
-Next, install the Node.js dependencies for the frontend.
+Arguments after the image name go to the inspector, such as `-a <agent card URL>`. Inside the container, `localhost` is the container itself: reach an agent on your machine at `host.docker.internal` (on Linux, add `--add-host host.docker.internal:host-gateway`). To build the image yourself, run `docker build -t a2a-inspector .`.
 
-```sh
-# Navigate to the frontend directory
-cd frontend
+## Usage
 
-# Install npm packages
-npm install
+```bash
+# Serve on 127.0.0.1:8080 and open the browser
+a2a-inspector
 
-# Go back to the root directory
-cd ..
+# Open with an agent's card
+a2a-inspector -a localhost:9999
+
+# Connect to an interface without a card
+a2a-inspector -e localhost:50051 --transport grpc --a2a-version 0.3
+
+# Send credentials and other headers to the agent
+a2a-inspector -a localhost:9999 --auth "Bearer $TOKEN" --svc-param X-Tenant=acme
 ```
 
-### 3. Run the Application
+The inspector prints a URL with a per-run token, which the browser exchanges for a session cookie. Run with `--help` for all the flags.
 
-You can run the A2A Inspector in two ways. Choose the option that best fits your workflow:
+Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 
-- Option 1 (Run Locally): Best for developers who are actively modifying the code. This method uses two separate terminal processes and provides live-reloading for both the frontend and backend.
-- Option 2 (Run with Docker): Best for quickly running the application without managing local Python and Node.js environments. Docker encapsulates all dependencies into a single container.
+## Development
 
-#### Option 1: Run Locally
+`main.go` is the command, `inspector/` the public package it runs, `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go.
 
-This approach requires you to run two processes concurrently. You can either use the provided convenience script or run them separately in different terminals.
-
-**Using the convenience script (recommended):**
-
-```sh
-# Make the script executable (first time only)
-chmod +x scripts/run.sh
-
-# Run both frontend and backend with a single command
-bash scripts/run.sh
+```bash
+go test ./...
+golangci-lint run   # golangci-lint v2, configured in .golangci.yml; `golangci-lint fmt` formats
 ```
 
-This will start both the frontend build process and backend server, displaying their outputs with colored prefixes. Press `Ctrl+C` to stop both services.
+To work on the UI, install its dependencies once (`npm install` in `ui/`), then:
 
-**Or manually in separate terminals:**
+- `npm run dev` starts a dev server that proxies the API to an inspector on port 8080 (set `A2A_INSPECTOR_URL` for another one). Open the inspector's printed URL first so the browser has the session cookie, then the dev server's URL.
+- `npm run lint`, `npm run typecheck` and `npm test` check the UI.
+- `npm run build` rebuilds `ui/dist`. Commit it together with the UI change; CI fails when it's out of date.
 
-Make sure you are in the root directory of the project (`a2a-inspector`) before starting.
+`scripts/gen-schemas.sh` regenerates the A2A JSON Schemas the validator embeds, and `npm run gen:types` in `ui/` the TypeScript types generated from them.
 
-**In your first terminal**, run the frontend development server. This will build the assets and automatically rebuild them when you make changes.
+## How to Contribute & Provide Feedback
 
-```sh
-# Navigate to the frontend directory
-cd frontend
+Open an issue or pull request to share suggestions, questions or bugs. See the **[Contributing guide](CONTRIBUTING.md)**.
 
-# Build the frontend and watch for changes
-npm run build -- --watch
-```
+## License
 
-**In a second terminal**, run the backend Python server.
-
-```sh
-# Navigate to the backend directory
-cd backend
-
-# Run the FastAPI server with live reload
-uv run -- uvicorn app:app --host 127.0.0.1 --port 5001 --reload
-```
-
-##### Access the Inspector
-
-Once both processes are running, open your web browser and navigate to:
-**[http://127.0.0.1:5001](http://127.0.0.1:5001)**
-
-#### Option Two: Run with Docker
-
-This approach builds the entire application into a single Docker image and runs it as a container. This is the simplest way to run the inspector if you have Docker installed and don't need to modify the code.
-
-From the root directory of the project, run the following command. This will build the frontend, copy the results into the backend, and package everything into an image named a2a-inspector.
-
-```sh
-docker build -t a2a-inspector .
-```
-
-Once the image is built, run it as a container.
-
-```sh
-# It will run the container in detached mode (in the background)
-docker run -d -p 8080:8080 a2a-inspector
-```
-
-The container is now running in the background. Open your web browser and navigate to:
-**[http://127.0.0.1:8080](http://127.0.0.1:8080)**
-
-### 4. Inspect your agents
-
-- Try inputting a sample agent URL such as `https://sample-a2a-agent-908687846511.us-central1.run.app`
+The A2A Inspector is open-source and licensed under the [**Apache License 2.0**](LICENSE).
