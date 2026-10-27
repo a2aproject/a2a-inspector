@@ -18,6 +18,8 @@ interface Props {
   onAddInterface: (iface: AgentInterface) => void;
   onRemoveInterface: (index: number) => void;
   onSettings: (settings: Settings) => void;
+  /** Fetches the card again with the agent's current settings. */
+  onFetchCard: () => void;
   onFetchExtendedCard: () => void;
   onShowTraffic: (entryId: string) => void;
 }
@@ -99,7 +101,7 @@ function CardContent(props: Props) {
   if (result.call.error || !result.payload) {
     return (
       <>
-        <CallFailure result={result} error={result.call.error} />
+        <CallFailure result={result} error={result.call.error} onFetchCard={props.onFetchCard} />
         {connect}
       </>
     );
@@ -107,7 +109,7 @@ function CardContent(props: Props) {
   return <CardOverview {...props} agent={agent} result={result} connect={connect} />;
 }
 
-function CallFailure({ result, error }: { result: CardResolveResponse; error: CallError | null }) {
+function CallFailure({ result, error, onFetchCard }: { result: CardResolveResponse; error: CallError | null; onFetchCard: () => void }) {
   return (
     <div role="alert" className="notice notice-error">
       <h2>Couldn't fetch the card</h2>
@@ -115,6 +117,14 @@ function CallFailure({ result, error }: { result: CardResolveResponse; error: Ca
         <span className="mono break">{result.cardUrl}</span>
       </p>
       <p>{error?.message ?? 'The agent sent no card.'}</p>
+      {(error?.code === 401 || error?.code === 403) && (
+        <p>The card needs credentials. Set the auth or a header under Connection below, then fetch it again.</p>
+      )}
+      <p>
+        <button type="button" className="button-quiet" onClick={onFetchCard}>
+          Fetch again
+        </button>
+      </p>
       {error?.raw !== undefined && error.raw !== '' && (
         <details>
           <summary>Response body</summary>
