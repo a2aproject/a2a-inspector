@@ -8,6 +8,7 @@
 </div>
 
 <p align="center">
+  <a href="https://github.com/a2aproject/a2a-inspector/releases/latest"><img src="https://img.shields.io/github/v/release/a2aproject/a2a-inspector?sort=semver" alt="Latest release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/a2aproject/a2a-inspector" alt="License: Apache-2.0"></a>
 </p>
 
@@ -29,7 +30,7 @@ Built on [A2A Protocol v1.0](https://a2a-protocol.org/v1.0.0/specification/), an
 **From source** (Go 1.26 or later)
 
 ```bash
-go install github.com/a2aproject/a2a-inspector@main
+go install github.com/a2aproject/a2a-inspector@latest
 ```
 
 Or run it from a clone of this repository with `go run .`.
