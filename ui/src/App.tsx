@@ -450,6 +450,7 @@ export function App() {
             onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
             onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}
             onSettings={(settings) => selected && dispatch({ type: 'settings', id: selected.id, settings })}
+            onFetchCard={() => selected && addAgent(selected.url)}
             onFetchExtendedCard={() => selected && void fetchExtendedCard(selected)}
             onShowTraffic={showTraffic}
           />

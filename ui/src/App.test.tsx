@@ -147,6 +147,7 @@ describe('App', () => {
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('The agent answered 404 Not Found.')).toBeInTheDocument();
+    expect(within(alert).queryByText(/needs credentials/)).not.toBeInTheDocument();
     expect(screen.getByText('Failed')).toBeInTheDocument();
     expect(screen.getByLabelText('Agent card URL')).toHaveValue('');
   });
@@ -444,6 +445,32 @@ describe('App', () => {
         url: 'http://localhost:9999/.well-known/agent-card.json',
         auth: { bearer: { value: 'card-token' } },
       });
+    });
+
+    it('fetches a protected card again with the auth set after a 401', async () => {
+      let calls = 0;
+      const fetch = mockApi({
+        '/api/config': () => json({ ...config, agentCardUrl: resolved.cardUrl }),
+        '/api/card:resolve': () =>
+          ++calls === 1
+            ? json({
+                cardUrl: resolved.cardUrl,
+                interfaces: [],
+                defaultInterface: null,
+                call: { latencyMs: 3, error: { message: 'The agent answered 401 Unauthorized.', code: 401, raw: '' } },
+              })
+            : json(resolved),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+
+      const alert = await screen.findByRole('alert');
+      expect(within(alert).getByText(/needs credentials/)).toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText('Auth'), 'bearer');
+      await user.type(screen.getByLabelText('Value'), 'card-token');
+      await user.click(within(alert).getByRole('button', { name: 'Fetch again' }));
+      await screen.findByRole('heading', { name: 'Echo Agent' });
+      expect(body(fetch, '/api/card:resolve', 1)).toEqual({ url: resolved.cardUrl, auth: { bearer: { value: 'card-token' } } });
     });
 
     it('stops a message that is not streamed', async () => {
