@@ -43,23 +43,25 @@ type unaryCall struct {
 // unary runs a unary call and writes its result. Agent failures are part of
 // the result; only the inspector's own errors are error responses.
 func (s *Server) unary(w http.ResponseWriter, r *http.Request, uc unaryCall) {
+	sess := sessionOf(r)
 	conn := uc.conn
-	_, secrets, err := conn.params()
+	tc, err := conn.call()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	tc := &traffic.Call{ConnectionID: conn.view.ID, Secrets: secrets}
+	release := conn.use()
+	defer release()
 	callCtx, stop := s.callContext(r)
 	defer stop()
 	ctx, cancel := context.WithTimeout(callCtx, sendTimeout)
 	defer cancel()
 	start := time.Now()
 	decoded, err := uc.do(traffic.WithCall(ctx, tc))
-	res := s.unaryResult(conn, tc, start, uc.kind, decoded, err)
+	res := s.unaryResult(sess, conn, tc, start, uc.kind, decoded, err)
 	res.Call.Findings = append(s.operationFindings(conn, uc.op), res.Call.Findings...)
 	conn.settle(&res, false)
-	res.Webhook = s.dropWebhook(ctx, uc.webhook, res)
+	res.Webhook = sess.hooks.drop(ctx, uc.webhook, res)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -99,14 +101,14 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id, verb := taskPath(r, "subscribe")
 	if verb == "subscribe" {
 		req := &a2a.SubscribeToTaskRequest{ID: a2a.TaskID(id)}
-		_, secrets, err := conn.params()
+		tc, err := conn.call()
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		s.streamEvents(w, r, streamCall{
 			conn: conn,
-			tc:   &traffic.Call{ConnectionID: conn.view.ID, Secrets: secrets},
+			tc:   tc,
 			op:   validate.SubscribeToTask,
 			run: func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 				return conn.client.SubscribeToTask(ctx, req)
@@ -222,8 +224,11 @@ func (s *Server) handleCreatePushConfig(w http.ResponseWriter, r *http.Request) 
 	case body.InspectorWebhook == (body.External != nil):
 		writeError(w, http.StatusBadRequest, `Give either "inspectorWebhook" or "external".`)
 		return
+	case body.InspectorWebhook && !s.webhooks():
+		writeError(w, http.StatusBadRequest, errNoWebhooks)
+		return
 	case body.InspectorWebhook:
-		wh, v := s.hooks.create(conn, taskID, s.webhookBaseURL())
+		wh, v := sessionOf(r).hooks.create(conn, taskID, s.webhookBaseURL())
 		cfg.URL, cfg.Token, view = v.URL, wh.token, &v
 	default:
 		e := body.External
@@ -289,7 +294,7 @@ func (s *Server) handleDeletePushConfig(w http.ResponseWriter, r *http.Request) 
 			if err := conn.client.DeleteTaskPushConfig(ctx, req); err != nil {
 				return nil, err
 			}
-			s.hooks.configDeleted(conn.view.ID, string(req.TaskID))
+			sessionOf(r).hooks.configDeleted(conn.view.ID, string(req.TaskID))
 			return struct{}{}, nil
 		}})
 }

@@ -15,24 +15,29 @@
 package inspector
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/a2aproject/a2a-inspector/internal/agents"
+	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"github.com/a2aproject/a2a-inspector/internal/server"
 	"github.com/a2aproject/a2a-inspector/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // defaultPort is fixed, because the browser keeps saved agents per address,
@@ -50,7 +55,25 @@ type flags struct {
 	port       int
 	noOpen     bool
 	webhookURL string
+
+	hosted      bool
+	egress      string
+	egressAllow []string
+	limits      server.Limits
+	trafficMiB  int
+	// given lists the flags set on the command line.
+	given map[string]bool
 }
+
+// hostedFlags are the limits, which only a hosted inspector applies.
+var hostedFlags = []string{
+	"max-sessions", "session-idle-timeout", "session-max-age", "max-connections", "max-streams",
+	"traffic-buffer-mib", "request-rate", "egress-rate", "max-stream-duration",
+}
+
+// startupFlags configure an agent and credentials for a single user, which a
+// hosted inspector doesn't have.
+var startupFlags = []string{"agent-card", "endpoint", "transport", "a2a-version", "auth", "svc-param", "webhook-url"}
 
 func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string) error) *cobra.Command {
 	var f flags
@@ -63,6 +86,8 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			f.given = map[string]bool{}
+			cmd.Flags().Visit(func(fl *pflag.Flag) { f.given[fl.Name] = true })
 			return run(cmd.Context(), opts, f, stdout, stderr, open)
 		},
 	}
@@ -77,6 +102,19 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 	fs.IntVar(&f.port, "port", defaultPort, "Port to listen on")
 	fs.BoolVar(&f.noOpen, "no-open", false, "Don't open the browser")
 	fs.StringVar(&f.webhookURL, "webhook-url", "", "Base URL agents use to reach the inspector's webhook receiver, such as a tunnel; default: the inspector's own address")
+	fs.BoolVar(&f.hosted, "hosted", false, "Run as a shared service for many users, each in their own session, within the limits below. "+
+		"Listens on all addresses and $PORT (default 8080), and turns off the webhook receiver and environment-variable secrets")
+	fs.StringVar(&f.egress, "egress", "", `Addresses the inspector connects to: "any", or "public" to block loopback, private, link-local (cloud metadata) and other non-public addresses (default "public" with --hosted, otherwise "any")`)
+	fs.StringArrayVar(&f.egressAllow, "egress-allow", nil, "With --egress=public, a CIDR block, IP address, host name or *.domain the inspector may still reach (repeatable)")
+	fs.IntVar(&f.limits.MaxSessions, "max-sessions", 500, "Hosted: sessions kept at once; a new one replaces the session idle the longest")
+	fs.DurationVar(&f.limits.IdleTimeout, "session-idle-timeout", 10*time.Minute, "Hosted: how long a session lives without an open tab or a request")
+	fs.DurationVar(&f.limits.MaxAge, "session-max-age", 8*time.Hour, "Hosted: how long a session lives at most")
+	fs.IntVar(&f.limits.Connections, "max-connections", 20, "Hosted: connections to agents per session; a new one replaces the one used the longest ago")
+	fs.IntVar(&f.limits.Streams, "max-streams", 8, "Hosted: streams open at once per session, the UI's traffic feed included")
+	fs.IntVar(&f.trafficMiB, "traffic-buffer-mib", 4, "Hosted: MiB of traffic log kept per session")
+	fs.Float64Var(&f.limits.RequestRate, "request-rate", 5, "Hosted: API requests per second per session")
+	fs.Float64Var(&f.limits.EgressRate, "egress-rate", 200, "Hosted: requests to agents per second, over all sessions")
+	fs.DurationVar(&f.limits.StreamDuration, "max-stream-duration", 30*time.Minute, "Hosted: how long a stream from an agent lasts at most")
 	for _, t := range opts.Transports {
 		if t.AddFlags != nil {
 			t.AddFlags(fs)
@@ -86,13 +124,27 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 }
 
 func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, open func(string) error) error {
+	if f.hosted {
+		if err := hostedDefaults(&f, os.Getenv); err != nil {
+			return err
+		}
+	}
 	sopts, err := serverOptions(opts, f)
 	if err != nil {
 		return err
 	}
-	token, err := newToken()
-	if err != nil {
-		return err
+	if f.hosted {
+		logger := log.New(stderr, "", log.LstdFlags)
+		sopts.Logger = logger
+		if sopts.Egress != nil {
+			sopts.Egress.OnBlock = func(_ string, err error) { logger.Print(err) }
+		}
+	}
+	var token string
+	if !f.hosted {
+		if token, err = newToken(); err != nil {
+			return err
+		}
 	}
 	ln, err := listen(f.host, f.port)
 	if err != nil {
@@ -107,16 +159,24 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	}
 	defer handler.Close()
 
-	if !agents.IsLoopbackHost(f.host) {
-		_, _ = fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+
-			"Anyone with the URL below can use it to send requests from this machine, "+
-			"with the credentials given to it and its environment variables.\n", f.host)
-	}
-	inspectorURL := startURL(f.host, port, token)
-	_, _ = fmt.Fprintf(stdout, "A2A Inspector is running at %s\nPress Ctrl+C to stop.\n", inspectorURL)
-	if !f.noOpen {
-		if err := open(inspectorURL); err != nil {
-			_, _ = fmt.Fprintf(stderr, "Couldn't open a browser (%v). Open the URL above.\n", err)
+	switch {
+	case f.hosted:
+		l := sopts.Limits
+		_, _ = fmt.Fprintf(stdout, "A2A Inspector is running in hosted mode on %s\n", net.JoinHostPort(f.host, strconv.Itoa(port)))
+		sopts.Logger.Printf("egress %s; limits: %d sessions, idle %s, max age %s; per session %d connections, %d streams, %d MiB traffic, %g requests/s; %g requests/s to agents; streams up to %s",
+			egressMode(f), l.MaxSessions, l.IdleTimeout, l.MaxAge, l.Connections, l.Streams, l.TrafficBytes>>20, l.RequestRate, l.EgressRate, l.StreamDuration)
+	default:
+		if !agents.IsLoopbackHost(f.host) {
+			_, _ = fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+
+				"Anyone with the URL below can use it to send requests from this machine, "+
+				"with the credentials given to it and its environment variables.\n", f.host)
+		}
+		inspectorURL := startURL(f.host, port, token)
+		_, _ = fmt.Fprintf(stdout, "A2A Inspector is running at %s\nPress Ctrl+C to stop.\n", inspectorURL)
+		if !f.noOpen {
+			if err := open(inspectorURL); err != nil {
+				_, _ = fmt.Fprintf(stderr, "Couldn't open a browser (%v). Open the URL above.\n", err)
+			}
 		}
 	}
 
@@ -137,6 +197,29 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	}
 }
 
+// hostedDefaults listens on all addresses and on $PORT, as hosting
+// platforms expect, unless the flags say otherwise.
+func hostedDefaults(f *flags, getenv func(string) string) error {
+	if !f.given["host"] {
+		f.host = "0.0.0.0"
+	}
+	if p := getenv("PORT"); p != "" && !f.given["port"] {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 0 || port > 65535 {
+			return fmt.Errorf("$PORT: %q isn't a port number", p)
+		}
+		f.port = port
+	}
+	return nil
+}
+
+func egressMode(f flags) string {
+	if f.egress == "" && f.hosted {
+		return "public"
+	}
+	return cmp.Or(f.egress, "any")
+}
+
 // serverOptions checks the flags and turns them and opts into server options.
 func serverOptions(opts Options, f flags) (server.Options, error) {
 	var so server.Options
@@ -146,10 +229,38 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 			so.Transports = append(so.Transports, agents.Transport{Binding: string(t.Protocol), Version: agents.Version03, Factory: t.CompatFactory})
 		}
 	}
-	if opts.WrapHTTPTransport != nil {
-		so.HTTPTransport = opts.WrapHTTPTransport(http.DefaultTransport)
-	}
+	so.WrapHTTPTransport = opts.WrapHTTPTransport
 	dialer := &agents.Dialer{Transports: so.Transports}
+
+	for _, name := range hostedFlags {
+		if f.given[name] && !f.hosted {
+			return so, fmt.Errorf("--%s needs --hosted", name)
+		}
+	}
+	if f.hosted {
+		for _, name := range startupFlags {
+			if f.given[name] {
+				return so, fmt.Errorf("--%s doesn't work with --hosted: a shared inspector has no startup agent, credentials or webhooks", name)
+			}
+		}
+		so.Hosted = true
+		so.Limits = f.limits
+		so.Limits.TrafficBytes = f.trafficMiB << 20
+	}
+	switch egressMode(f) {
+	case "any":
+		if len(f.egressAllow) > 0 {
+			return so, errors.New("--egress-allow needs --egress=public")
+		}
+	case "public":
+		policy, err := egress.New(f.egressAllow)
+		if err != nil {
+			return so, fmt.Errorf("--egress-allow: %w", err)
+		}
+		so.Egress = policy
+	default:
+		return so, fmt.Errorf(`--egress: %q isn't "any" or "public"`, f.egress)
+	}
 
 	switch f.a2aVersion {
 	case "", agents.Version10, agents.Version03:

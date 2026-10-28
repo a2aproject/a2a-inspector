@@ -127,7 +127,7 @@ func TestSecrets(t *testing.T) {
 
 func mustConnection(t *testing.T, s *Server, id string) *connection {
 	t.Helper()
-	c, ok := s.conns.get(id)
+	c, ok := s.local.conns.get(id)
 	if !ok {
 		t.Fatalf("no connection %s", id)
 	}
@@ -156,7 +156,7 @@ func TestStartupConfig(t *testing.T) {
 	if h := st.Headers[1]; h.Value != "acme" || h.Secret != nil {
 		t.Errorf("header = %+v", h)
 	}
-	if v, err := s.secrets.resolve(st.Headers[0].Secret.Ref); err != nil || v != secret {
+	if v, err := s.local.secrets.resolve(st.Headers[0].Secret.Ref); err != nil || v != secret {
 		t.Errorf("resolve() = %q, %v", v, err)
 	}
 }

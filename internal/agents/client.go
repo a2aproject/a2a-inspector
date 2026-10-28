@@ -28,6 +28,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 	a2agrpcv0 "github.com/a2aproject/a2a-go/v2/a2agrpc/v0"
 	a2agrpcv1 "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
+	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -49,6 +50,9 @@ type Dialer struct {
 	HTTPClient      *http.Client
 	GRPCDialOptions []grpc.DialOption
 	Transports      []Transport
+	// Egress, if set, limits where gRPC connections go. HTTPClient's
+	// transport has to apply it to HTTP itself.
+	Egress *egress.Policy
 }
 
 // Supports reports whether the dialer can talk to interfaces with this
@@ -151,6 +155,13 @@ func (d *Dialer) grpcConn(rawURL string) (*grpc.ClientConn, error) {
 		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	}
 	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, d.GRPCDialOptions...)
+	if d.Egress != nil {
+		var err error
+		if target, err = egress.GRPCTarget(target); err != nil {
+			return nil, err
+		}
+		opts = append(opts, grpc.WithContextDialer(d.Egress.DialGRPC))
+	}
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("invalid gRPC target %q: %w", target, err)

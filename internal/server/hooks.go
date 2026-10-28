@@ -39,6 +39,10 @@ import (
 // maxNotifications is how many received push notifications the inspector keeps.
 const maxNotifications = 500
 
+// errNoWebhooks answers requests for the inspector's webhooks when the
+// receiver is off.
+const errNoWebhooks = "A shared inspector has no webhook receiver, since agents can't reach it. Use a push notification config for another URL."
+
 // tokenHeaders carry a push notification config's token. a2a-go sends the
 // first; most other SDKs send the second, in both versions.
 var tokenHeaders = []string{"A2A-Notification-Token", "X-A2A-Notification-Token"}
@@ -146,16 +150,16 @@ func (h *hooks) bind(view *webhookView, res agentResult) {
 	}
 }
 
-// dropWebhook removes the webhook a call created when the agent rejected the
-// call or never got it, and returns the webhook to report. After a cancel or
-// a timeout the agent may have taken the config, so the webhook stays.
-func (s *Server) dropWebhook(ctx context.Context, view *webhookView, res agentResult) *webhookView {
+// drop removes the webhook a call created when the agent rejected the call
+// or never got it, and returns the webhook to report. After a cancel or a
+// timeout the agent may have taken the config, so the webhook stays.
+func (h *hooks) drop(ctx context.Context, view *webhookView, res agentResult) *webhookView {
 	if view == nil || view.Existing || res.Call.Error == nil || !res.Call.Error.rejected || ctx.Err() != nil {
 		return view
 	}
-	s.hooks.mu.Lock()
-	delete(s.hooks.webhooks, view.ID)
-	s.hooks.mu.Unlock()
+	h.mu.Lock()
+	delete(h.webhooks, view.ID)
+	h.mu.Unlock()
 	return nil
 }
 
@@ -251,7 +255,9 @@ func randomString(n int) string {
 // for a known webhook, also one with a wrong token, which the UI shows as
 // such; the agent learns nothing from the answer.
 func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
-	wh, ok := s.hooks.webhook(r.PathValue("hook"))
+	// Only a local inspector receives webhooks, for its single session.
+	sess := s.local
+	wh, ok := sess.hooks.webhook(r.PathValue("hook"))
 	if !ok {
 		http.Error(w, "Unknown webhook.", http.StatusNotFound)
 		return
@@ -282,7 +288,7 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	n.Payload, n.Error = s.notificationPayload(body, wh.version)
 	if n.Payload != nil {
 		n.TaskID = taskRefOf(n.Payload.Raw).ID
-		if conn, ok := s.conns.get(wh.connectionID); ok && n.TokenValid {
+		if conn, ok := sess.conns.get(wh.connectionID); ok && n.TokenValid {
 			before := conversationOf(conn)
 			conn.observe(n.Payload.Raw, false)
 			if after := conversationOf(conn); !conversationEqual(before, after) {
@@ -291,7 +297,7 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	n.TaskID = cmp.Or(n.TaskID, wh.taskID)
-	s.hooks.add(n)
+	sess.hooks.add(n)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -367,8 +373,13 @@ func (s *Server) handleHooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Streaming isn't supported by this server.")
 		return
 	}
+	sess := sessionOf(r)
+	if !s.openStream(w, sess) {
+		return
+	}
+	defer sess.closeStream()
 	connID, taskID := r.URL.Query().Get("connectionId"), r.URL.Query().Get("taskId")
-	snapshot, updates, cancel := s.hooks.subscribe(func(n *notification) bool {
+	snapshot, updates, cancel := sess.hooks.subscribe(func(n *notification) bool {
 		return (connID == "" || n.ConnectionID == connID) && (taskID == "" || n.TaskID == taskID)
 	})
 	defer cancel()
@@ -378,7 +389,7 @@ func (s *Server) handleHooks(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	conversations := map[string]conversation{}
-	for _, c := range s.conns.all() {
+	for _, c := range sess.conns.all() {
 		if connID == "" || c.view.ID == connID {
 			conversations[c.view.ID] = conversationOf(c)
 		}
@@ -394,7 +405,7 @@ func (s *Server) handleHooks(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-s.ctx.Done():
+		case <-sess.ctx.Done():
 			return
 		case <-keepAlive.C:
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
