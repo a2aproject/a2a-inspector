@@ -430,11 +430,13 @@ func (s *Server) httpPayload(entry *traffic.Entry, version, binding string, kind
 		return nil, nil
 	}
 	var findings []validate.Finding
-	if mediaType, _, perr := mime.ParseMediaType(headerValue(h.ResponseHeaders, "Content-Type")); perr != nil || mediaType != "application/json" {
+	contentType := headerValue(h.ResponseHeaders, "Content-Type")
+	want := responseMediaTypes(binding, version)
+	if mediaType, _, perr := mime.ParseMediaType(contentType); perr != nil || !slices.Contains(want, mediaType) {
 		findings = append(findings, validate.Finding{
 			Severity: validate.SeverityWarning,
 			Rule:     "content-type",
-			Message:  fmt.Sprintf("The response was served as %q; A2A responses are application/json.", headerValue(h.ResponseHeaders, "Content-Type")),
+			Message:  fmt.Sprintf("The response was served as %q; %s %s responses are %s.", contentType, binding, version, strings.Join(want, " or ")),
 		})
 	}
 	if binding == agents.BindingJSONRPC {
@@ -450,6 +452,16 @@ func (s *Server) httpPayload(entry *traffic.Entry, version, binding string, kind
 	p := s.payload(body, version, binding, kind)
 	p.Validation = validate.Merge(p.Validation, findings...)
 	return p, nil
+}
+
+// responseMediaTypes are the media types an agent can serve a JSON response
+// as on a binding and version. HTTP+JSON 1.0 has its own media type, but
+// still allows application/json.
+func responseMediaTypes(binding, version string) []string {
+	if binding == agents.BindingHTTPJSON && version == agents.Version10 {
+		return []string{"application/a2a+json", "application/json"}
+	}
+	return []string{"application/json"}
 }
 
 // jsonrpcPayload takes the result out of a JSON-RPC response.

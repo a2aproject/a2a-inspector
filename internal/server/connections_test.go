@@ -17,6 +17,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -203,6 +204,45 @@ func TestStreamWithoutStream(t *testing.T) {
 		if !rules[want] {
 			t.Errorf("findings = %+v, want %q", res.Payload.Validation.Findings, want)
 		}
+	}
+}
+
+func TestResponseContentType(t *testing.T) {
+	s := newServer(t, Options{})
+	const (
+		v10Message = `{"message":{"messageId":"m","role":"ROLE_AGENT","parts":[{"text":"hi"}]}}`
+		v03Message = `{"message":{"messageId":"m","role":"ROLE_AGENT","content":[{"text":"hi"}]}}`
+	)
+	tests := []struct {
+		binding, version, contentType, body string
+		wantFinding                         bool
+	}{
+		{"HTTP+JSON", "1.0", "application/a2a+json", v10Message, false},
+		{"HTTP+JSON", "1.0", "application/json; charset=utf-8", v10Message, false},
+		{"HTTP+JSON", "1.0", "text/plain", v10Message, true},
+		{"HTTP+JSON", "0.3", "application/a2a+json", v03Message, true},
+		{"JSONRPC", "1.0", "application/a2a+json", `{"jsonrpc":"2.0","id":"1","result":` + v10Message + `}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.binding+" "+tt.version+" "+tt.contentType, func(t *testing.T) {
+			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tt.contentType)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer agent.Close()
+			conn := s.connect(t, fmt.Sprintf(`{"interface":{"url":%q,"protocolBinding":%q,"protocolVersion":%q}}`, agent.URL, tt.binding, tt.version))
+			res := s.send(t, conn.ID, `{"compose":{"text":"hi"}}`)
+			if res.Payload == nil {
+				t.Fatalf("result = %+v, want the payload", res)
+			}
+			got := false
+			for _, f := range res.Payload.Validation.Findings {
+				got = got || f.Rule == "content-type"
+			}
+			if got != tt.wantFinding {
+				t.Errorf("findings = %+v, want a content-type finding: %t", res.Payload.Validation.Findings, tt.wantFinding)
+			}
+		})
 	}
 }
 
