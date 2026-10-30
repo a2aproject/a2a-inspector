@@ -57,12 +57,52 @@ export interface Call {
 }
 
 export interface CardResolveResponse {
+  /** Empty for a card that came in a catalog entry. */
   cardUrl: string;
   payload?: AgentPayload;
   /** Card formats present: ["1.0"], ["0.3"], or ["1.0", "0.3"] for a v1.0 card that also has v0.3 fields. */
   versions?: ProtocolVersion[];
   interfaces: AgentInterface[];
   defaultInterface: number | null;
+  call: Call;
+}
+
+export interface CardValidateResponse {
+  protocolVersion: ProtocolVersion;
+  versions: ProtocolVersion[];
+  validation: ValidationReport;
+  interfaces: AgentInterface[];
+  defaultInterface: number | null;
+}
+
+/** An A2A agent listed in an AI Catalog. */
+export interface CatalogAgent {
+  identifier: string;
+  displayName?: string;
+  description?: string;
+  /** Where the card is, unless the catalog has the card itself. */
+  cardUrl?: string;
+  card?: unknown;
+  /** The entry's com.github.a2aproject.inspector extension. */
+  inspector?: unknown;
+  /** The catalog that lists the agent. */
+  catalog?: string;
+}
+
+/** The agents of a catalog and the catalogs nested in it. */
+export interface CatalogResult {
+  agents: CatalogAgent[];
+  /** Entries that are neither A2A agents nor catalogs. */
+  skipped: number;
+  /** Nested catalogs and agent entries that couldn't be read. */
+  problems?: { catalog?: string; message: string }[];
+  /** The catalog's own com.github.a2aproject.inspector extension. */
+  inspector?: unknown;
+}
+
+export interface CatalogResolveResponse extends CatalogResult {
+  /** The URL the catalog was fetched from, after redirects. */
+  catalogUrl?: string;
   call: Call;
 }
 
@@ -127,8 +167,11 @@ export interface Config {
   /** The agent given with --agent-card. */
   agentCardUrl?: string;
   startup?: Startup;
-  /** envSecrets: secrets can refer to the inspector's environment variables. */
-  features: { serve: boolean; webhooks: boolean; envSecrets: boolean };
+  /**
+   * envSecrets: secrets can refer to the inspector's environment variables. sharedCatalog: GET
+   * /api/catalog lists agents for every user.
+   */
+  features: { serve: boolean; webhooks: boolean; envSecrets: boolean; sharedCatalog?: boolean };
   /** Protocol bindings the inspector supports. */
   bindings?: string[];
   /** Where agents send push notifications to the inspector, for this run. */

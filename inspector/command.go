@@ -55,6 +55,7 @@ type flags struct {
 	port       int
 	noOpen     bool
 	webhookURL string
+	catalog    string
 
 	hosted      bool
 	egress      string
@@ -106,6 +107,7 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 	fs.IntVar(&f.port, "port", defaultPort, "Port to listen on")
 	fs.BoolVar(&f.noOpen, "no-open", false, "Don't open the browser")
 	fs.StringVar(&f.webhookURL, "webhook-url", "", "Base URL agents use to reach the inspector's webhook receiver, such as a tunnel; default: the inspector's own address")
+	fs.StringVar(&f.catalog, "catalog", "", "AI Catalog file or URL whose agents every user sees in the agent list; read on start")
 	fs.BoolVar(&f.hosted, "hosted", false, "Run as a shared service for many users, each in their own session, within the limits below. "+
 		"Listens on all addresses and $PORT (default 8080), and turns off the webhook receiver and environment-variable secrets")
 	fs.StringVar(&f.egress, "egress", "", `Addresses the inspector connects to: "any", or "public" to block loopback, private, link-local (cloud metadata) and other non-public addresses (default "public" with --hosted, otherwise "any")`)
@@ -245,6 +247,7 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 		}
 	}
 	so.WrapHTTPTransport = opts.WrapHTTPTransport
+	so.Catalog = f.catalog
 	dialer := &agents.Dialer{Transports: so.Transports}
 
 	for _, name := range hostedFlags {

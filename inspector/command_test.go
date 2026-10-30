@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -233,6 +234,19 @@ func TestFlagErrors(t *testing.T) {
 		if err := cmd.Execute(); err == nil {
 			t.Errorf("Execute(%v) succeeded", args)
 		}
+	}
+}
+
+func TestCatalogFlag(t *testing.T) {
+	for _, f := range []flags{{catalog: "agents.json"}, {hosted: true, catalog: "agents.json"}} {
+		if so, err := serverOptions(Options{}, f); err != nil || so.Catalog != "agents.json" {
+			t.Errorf("serverOptions(%+v) = %q, %v", f, so.Catalog, err)
+		}
+	}
+	cmd := newCommand(Options{}, &syncBuffer{}, &syncBuffer{}, func(string) error { return nil })
+	cmd.SetArgs([]string{"--port", "0", "--no-open", "--catalog", filepath.Join(t.TempDir(), "missing.json")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "missing.json") {
+		t.Errorf("Execute() with a missing catalog = %v", err)
 	}
 }
 

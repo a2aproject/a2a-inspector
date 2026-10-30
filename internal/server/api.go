@@ -79,6 +79,8 @@ type features struct {
 	// EnvSecrets is set when secrets can refer to the inspector's
 	// environment variables.
 	EnvSecrets bool `json:"envSecrets"`
+	// SharedCatalog is set when GET /api/catalog lists agents for every user.
+	SharedCatalog bool `json:"sharedCatalog"`
 }
 
 type configResponse struct {
@@ -147,7 +149,7 @@ func (s *Server) config() configResponse {
 		return configResponse{
 			Mode:               "hosted",
 			IdleTimeoutSeconds: int(s.opts.Limits.IdleTimeout.Seconds()),
-			Features:           features{},
+			Features:           features{SharedCatalog: s.shared != nil},
 			Bindings:           bindings,
 		}
 	}
@@ -155,7 +157,7 @@ func (s *Server) config() configResponse {
 		Mode:                  "local",
 		AgentCardURL:          s.opts.AgentCardURL,
 		Startup:               s.startup,
-		Features:              features{Webhooks: true, EnvSecrets: true},
+		Features:              features{Webhooks: true, EnvSecrets: true, SharedCatalog: s.shared != nil},
 		Bindings:              bindings,
 		WebhookBaseURL:        s.webhookBaseURL(),
 		DefaultWebhookBaseURL: s.defaultWebhookURL,
@@ -310,7 +312,7 @@ func (s *Server) handleCardValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchCard fetches a card for a connection, or returns why it couldn't.
-func fetchCard(r *http.Request, sess *session, cardURL string, headers http.Header, secrets []string) (*agents.CardResponse, string) {
+func fetchCard(r *http.Request, sess *session, cardURL string, headers http.Header, secrets []string) (*agents.Response, string) {
 	ctx, cancel := context.WithTimeout(r.Context(), cardTimeout)
 	defer cancel()
 	tc := &traffic.Call{Secrets: secrets, Headers: slices.Collect(maps.Keys(headers))}
