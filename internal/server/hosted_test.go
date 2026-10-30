@@ -16,6 +16,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,10 +40,12 @@ func newHosted(t *testing.T, limits Limits) *Server {
 }
 
 // browser makes requests to a hosted inspector with its own cookie, as one
-// browser would.
+// browser would. headers go with every request, as a proxy in front of the
+// inspector adds them.
 type browser struct {
-	s      *Server
-	cookie string
+	s       *Server
+	cookie  string
+	headers map[string]string
 }
 
 func (b *browser) do(req request) *httptest.ResponseRecorder {
@@ -56,6 +59,9 @@ func (b *browser) do(req request) *httptest.ResponseRecorder {
 	}
 	if b.cookie != "" {
 		r.AddCookie(&http.Cookie{Name: hostedCookie, Value: b.cookie})
+	}
+	for k, v := range b.headers {
+		r.Header.Set(k, v)
 	}
 	for k, v := range req.headers {
 		r.Header.Set(k, v)
@@ -88,6 +94,17 @@ func entries(l *traffic.Log) int {
 func errorCode(t *testing.T, w *httptest.ResponseRecorder) string {
 	t.Helper()
 	return decodeBody[errorResponse](t, w).Error.Code
+}
+
+// sendError sends a message over the connection and returns the call's
+// error, or "" when it succeeded.
+func sendError(t *testing.T, b *browser, conn connectionResponse) string {
+	t.Helper()
+	w := b.do(request{method: http.MethodPost, target: "/api/connections/" + conn.ID + "/messages:send", body: `{"compose":{"text":"hi"}}`})
+	if res := decodeBody[agentResult](t, w); res.Call.Error != nil {
+		return res.Call.Error.Message
+	}
+	return ""
 }
 
 func TestHostedSessions(t *testing.T) {
@@ -264,6 +281,21 @@ func TestHostedRateLimits(t *testing.T) {
 			t.Errorf("second send error = %+v", res.Call.Error)
 		}
 	})
+	t.Run("requests to agents per session", func(t *testing.T) {
+		agent := jsonrpcAgent(t, "application/json", messageResult)
+		s := newHosted(t, Limits{SessionEgressRate: 0.01})
+		alice, bob := &browser{s: s}, &browser{s: s}
+		aliceConn, bobConn := alice.connect(t, agent.URL), bob.connect(t, agent.URL)
+		if msg := sendError(t, alice, aliceConn); msg != "" {
+			t.Fatalf("first send: %s", msg)
+		}
+		if msg := sendError(t, alice, aliceConn); !strings.Contains(msg, "your session's limit of requests to agents") {
+			t.Errorf("second send error = %q", msg)
+		}
+		if msg := sendError(t, bob, bobConn); msg != "" {
+			t.Errorf("another session's send: %s", msg)
+		}
+	})
 	t.Run("request body size", func(t *testing.T) {
 		s := newHosted(t, Limits{})
 		big := `{"card":` + `"` + strings.Repeat("x", hostedRequestSize) + `"}`
@@ -310,6 +342,138 @@ func TestHostedStreamLimit(t *testing.T) {
 			t.Fatal("the stream slot wasn't freed after the feed closed")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestLimitsAllow(t *testing.T) {
+	errA, errB := errors.New("a"), errors.New("b")
+	a, b := rate.NewLimiter(rate.Every(time.Hour), 1), rate.NewLimiter(rate.Every(time.Hour), 1)
+	ls := limits{{a, errA}, {nil, nil}, {b, errB}}
+	if err := ls.allow(time.Now()); err != nil {
+		t.Fatalf("first request = %v", err)
+	}
+	a = rate.NewLimiter(rate.Every(time.Hour), 1)
+	ls[0].limiter = a
+	if err := ls.allow(time.Now()); !errors.Is(err, errB) {
+		t.Errorf("with b used up = %v, want b's error", err)
+	}
+	if !a.Allow() {
+		t.Error("the request b refused used up a's token")
+	}
+}
+
+func TestHostedClientLimits(t *testing.T) {
+	// The first entry is what the client claims, which the inspector ignores.
+	from := func(s *Server, ip string) *browser {
+		return &browser{s: s, headers: map[string]string{"X-Forwarded-For": "198.51.100.1, " + ip}}
+	}
+	perClient := func(l Limits) Limits {
+		l.ClientHeader, l.TrustedProxies = "X-Forwarded-For", 1
+		return l
+	}
+	config := request{target: "/api/config"}
+
+	t.Run("sessions per client", func(t *testing.T) {
+		s := newHosted(t, perClient(Limits{ClientSessions: 2}))
+		first, second, other := from(s, "203.0.113.7"), from(s, "203.0.113.7"), from(s, "203.0.113.8")
+		other.do(config)
+		first.do(config)
+		time.Sleep(10 * time.Millisecond)
+		second.do(config)
+
+		third := from(s, "203.0.113.7")
+		if w := third.do(config); w.Code != http.StatusOK {
+			t.Fatalf("third session = %d %s", w.Code, w.Body)
+		}
+		if s.sessions.get(first.cookie) != nil || s.sessions.get(second.cookie) == nil || s.sessions.get(other.cookie) == nil {
+			t.Error("the limit didn't replace the client's session idle the longest")
+		}
+
+		// With every session of the client busy, it has no room; other clients do.
+		for _, b := range []*browser{second, third} {
+			sess := s.sessions.get(b.cookie)
+			sess.begin()
+			t.Cleanup(sess.end)
+		}
+		if w := from(s, "203.0.113.7").do(config); w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "from your address or account") {
+			t.Errorf("session over the client's limit = %d %s", w.Code, w.Body)
+		}
+		if w := from(s, "203.0.113.9").do(config); w.Code != http.StatusOK {
+			t.Errorf("another client's session = %d %s", w.Code, w.Body)
+		}
+	})
+
+	t.Run("new sessions per client", func(t *testing.T) {
+		s := newHosted(t, perClient(Limits{IdleTimeout: time.Minute}))
+		for i := range clientSessionBurst + 1 {
+			want := http.StatusOK
+			if i == clientSessionBurst {
+				want = http.StatusTooManyRequests
+			}
+			if w := from(s, "203.0.113.7").do(config); w.Code != want {
+				t.Errorf("session %d = %d, want %d", i, w.Code, want)
+			}
+		}
+		if w := from(s, "203.0.113.8").do(config); w.Code != http.StatusOK {
+			t.Errorf("another client's session = %d %s", w.Code, w.Body)
+		}
+
+		// A quota goes once its client's sessions end and its limits refill.
+		s.sessions.sweep(time.Now().Add(time.Hour))
+		s.sessions.mu.Lock()
+		defer s.sessions.mu.Unlock()
+		if n := len(s.sessions.clients); n != 0 {
+			t.Errorf("%d quotas left after the sessions ended", n)
+		}
+	})
+
+	t.Run("requests to agents per client", func(t *testing.T) {
+		agent := jsonrpcAgent(t, "application/json", messageResult)
+		s := newHosted(t, perClient(Limits{ClientEgressRate: 0.01}))
+		first, second, other := from(s, "203.0.113.7"), from(s, "203.0.113.7"), from(s, "203.0.113.8")
+		firstConn, secondConn, otherConn := first.connect(t, agent.URL), second.connect(t, agent.URL), other.connect(t, agent.URL)
+		if msg := sendError(t, first, firstConn); msg != "" {
+			t.Fatalf("first send: %s", msg)
+		}
+		if msg := sendError(t, second, secondConn); !strings.Contains(msg, "requests to agents from your address or account") {
+			t.Errorf("send from the client's other session = %q", msg)
+		}
+		if msg := sendError(t, other, otherConn); msg != "" {
+			t.Errorf("another client's send: %s", msg)
+		}
+	})
+}
+
+func TestClientOf(t *testing.T) {
+	xff := func(proxies int) Limits { return Limits{ClientHeader: "X-Forwarded-For", TrustedProxies: proxies} }
+	for _, tc := range []struct {
+		name   string
+		limits Limits
+		header []string
+		want   string
+	}{
+		{"no limits per client", Limits{}, nil, ""},
+		{"the entry the proxy added", xff(1), []string{"198.51.100.1, 203.0.113.7"}, "203.0.113.7"},
+		{"behind two proxies", xff(2), []string{"198.51.100.1, 203.0.113.7, 192.0.2.50"}, "203.0.113.7"},
+		{"over several header lines", xff(2), []string{"198.51.100.1", "203.0.113.7, 192.0.2.50"}, "203.0.113.7"},
+		{"with a port", xff(1), []string{"203.0.113.7:4711"}, "203.0.113.7"},
+		{"IPv6 per /64", xff(1), []string{"2001:db8:1:2:3:4:5:6"}, "2001:db8:1:2::/64"},
+		{"IPv4-mapped IPv6", xff(1), []string{"::ffff:203.0.113.7"}, "203.0.113.7"},
+		{"fewer entries than proxies", xff(2), []string{"203.0.113.7"}, "192.0.2.1"},
+		{"no header", xff(1), nil, "192.0.2.1"},
+		{"an empty entry", xff(1), []string{"203.0.113.7, "}, "192.0.2.1"},
+		{"a signed-in user", Limits{ClientHeader: "X-User", TrustedProxies: 1}, []string{"alice@example.com"}, "alice@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{opts: Options{Limits: tc.limits}}
+			r := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+			if tc.header != nil {
+				r.Header[http.CanonicalHeaderKey(tc.limits.ClientHeader)] = tc.header
+			}
+			if got := s.clientOf(r); got != tc.want {
+				t.Errorf("clientOf() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -68,8 +68,12 @@ type flags struct {
 // hostedFlags are the limits, which only a hosted inspector applies.
 var hostedFlags = []string{
 	"max-sessions", "session-idle-timeout", "session-max-age", "max-connections", "max-streams",
-	"traffic-buffer-mib", "request-rate", "egress-rate", "max-stream-duration",
+	"traffic-buffer-mib", "request-rate", "session-egress-rate", "egress-rate", "max-stream-duration",
+	"client-header", "trusted-proxies", "client-max-sessions", "client-egress-rate",
 }
+
+// clientFlags configure the limits per client, which need --client-header.
+var clientFlags = []string{"trusted-proxies", "client-max-sessions", "client-egress-rate"}
 
 // startupFlags configure an agent and credentials for a single user, which a
 // hosted inspector doesn't have.
@@ -113,8 +117,14 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 	fs.IntVar(&f.limits.Streams, "max-streams", 8, "Hosted: streams open at once per session, the UI's traffic feed included")
 	fs.IntVar(&f.trafficMiB, "traffic-buffer-mib", 4, "Hosted: MiB of traffic log kept per session")
 	fs.Float64Var(&f.limits.RequestRate, "request-rate", 5, "Hosted: API requests per second per session")
+	fs.Float64Var(&f.limits.SessionEgressRate, "session-egress-rate", 10, "Hosted: requests to agents per second per session")
 	fs.Float64Var(&f.limits.EgressRate, "egress-rate", 200, "Hosted: requests to agents per second, over all sessions")
 	fs.DurationVar(&f.limits.StreamDuration, "max-stream-duration", 30*time.Minute, "Hosted: how long a stream from an agent lasts at most")
+	fs.StringVar(&f.limits.ClientHeader, "client-header", "", "Hosted: request header that identifies a client, set by the proxy in front of the inspector, "+
+		"such as X-Forwarded-For or a header with the signed-in user; turns on the limits per client below")
+	fs.IntVar(&f.limits.TrustedProxies, "trusted-proxies", 1, "Hosted: proxies that add an entry to --client-header; the client is the entry that many from the end")
+	fs.IntVar(&f.limits.ClientSessions, "client-max-sessions", 10, "Hosted: sessions per client; a new one replaces the client's session idle the longest")
+	fs.Float64Var(&f.limits.ClientEgressRate, "client-egress-rate", 50, "Hosted: requests to agents per second per client, over its sessions")
 	for _, t := range opts.Transports {
 		if t.AddFlags != nil {
 			t.AddFlags(fs)
@@ -163,8 +173,13 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	case f.hosted:
 		l := sopts.Limits
 		_, _ = fmt.Fprintf(stdout, "A2A Inspector is running in hosted mode on %s\n", net.JoinHostPort(f.host, strconv.Itoa(port)))
-		sopts.Logger.Printf("egress %s; limits: %d sessions, idle %s, max age %s; per session %d connections, %d streams, %d MiB traffic, %g requests/s; %g requests/s to agents; streams up to %s",
-			egressMode(f), l.MaxSessions, l.IdleTimeout, l.MaxAge, l.Connections, l.Streams, l.TrafficBytes>>20, l.RequestRate, l.EgressRate, l.StreamDuration)
+		perClient := "no limits per client"
+		if l.ClientHeader != "" {
+			perClient = fmt.Sprintf("per client from %s (%d trusted proxies) %d sessions, %g requests/s to agents",
+				l.ClientHeader, l.TrustedProxies, l.ClientSessions, l.ClientEgressRate)
+		}
+		sopts.Logger.Printf("egress %s; limits: %d sessions, idle %s, max age %s; per session %d connections, %d streams, %d MiB traffic, %g requests/s, %g requests/s to agents; %s; %g requests/s to agents in all; streams up to %s",
+			egressMode(f), l.MaxSessions, l.IdleTimeout, l.MaxAge, l.Connections, l.Streams, l.TrafficBytes>>20, l.RequestRate, l.SessionEgressRate, perClient, l.EgressRate, l.StreamDuration)
 	default:
 		if !agents.IsLoopbackHost(f.host) {
 			_, _ = fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+
@@ -246,6 +261,17 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 		so.Hosted = true
 		so.Limits = f.limits
 		so.Limits.TrafficBytes = f.trafficMiB << 20
+		so.Limits.ClientHeader = strings.TrimSpace(f.limits.ClientHeader)
+		switch {
+		case so.Limits.ClientHeader == "":
+			for _, name := range clientFlags {
+				if f.given[name] {
+					return so, fmt.Errorf("--%s needs --client-header", name)
+				}
+			}
+		case so.Limits.TrustedProxies < 1:
+			return so, errors.New("--trusted-proxies must be at least 1")
+		}
 	}
 	switch egressMode(f) {
 	case "any":

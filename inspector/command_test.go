@@ -360,7 +360,7 @@ func TestTransportFlags(t *testing.T) {
 }
 
 func TestRunHosted(t *testing.T) {
-	r := start(t, "--hosted", "--host", "127.0.0.1", "--port", "0", "--max-sessions", "3")
+	r := start(t, "--hosted", "--host", "127.0.0.1", "--port", "0", "--max-sessions", "3", "--client-header", "X-Forwarded-For")
 	re := regexp.MustCompile(`hosted mode on (\S+)`)
 	var addr string
 	deadline := time.Now().Add(5 * time.Second)
@@ -378,7 +378,8 @@ func TestRunHosted(t *testing.T) {
 		t.Errorf("opened %q in hosted mode", opened)
 	default:
 	}
-	if !strings.Contains(r.stderr.String(), "egress public; limits: 3 sessions") {
+	if !strings.Contains(r.stderr.String(), "egress public; limits: 3 sessions") ||
+		!strings.Contains(r.stderr.String(), "per client from X-Forwarded-For (1 trusted proxies) 10 sessions, 50 requests/s to agents") {
 		t.Errorf("stderr = %q, want the limits", r.stderr.String())
 	}
 	resp, err := http.Get("http://" + addr + "/api/config")
@@ -427,6 +428,12 @@ func TestHostedServerOptions(t *testing.T) {
 	if so, err := serverOptions(Options{}, flags{egress: "public"}); err != nil || so.Egress == nil {
 		t.Errorf("local --egress=public = %+v, %v", so, err)
 	}
+	perClient := server.Limits{ClientHeader: " X-Forwarded-For ", TrustedProxies: 2, ClientSessions: 3}
+	given := map[string]bool{"client-header": true, "trusted-proxies": true, "client-max-sessions": true}
+	if so, err := serverOptions(Options{}, flags{hosted: true, limits: perClient, given: given}); err != nil ||
+		so.Limits.ClientHeader != "X-Forwarded-For" || so.Limits.TrustedProxies != 2 || so.Limits.ClientSessions != 3 {
+		t.Errorf("limits per client = %+v, %v", so.Limits, err)
+	}
 	for _, tc := range []struct {
 		f    flags
 		want string
@@ -434,6 +441,9 @@ func TestHostedServerOptions(t *testing.T) {
 		{flags{hosted: true, agentCard: "x", given: map[string]bool{"agent-card": true}}, "--agent-card doesn't work with --hosted"},
 		{flags{hosted: true, given: map[string]bool{"auth": true}}, "--auth doesn't work with --hosted"},
 		{flags{given: map[string]bool{"max-sessions": true}}, "--max-sessions needs --hosted"},
+		{flags{given: map[string]bool{"client-header": true}}, "--client-header needs --hosted"},
+		{flags{hosted: true, given: map[string]bool{"client-max-sessions": true}}, "--client-max-sessions needs --client-header"},
+		{flags{hosted: true, limits: server.Limits{ClientHeader: "X-Forwarded-For"}}, "--trusted-proxies must be at least 1"},
 		{flags{egressAllow: []string{"10.0.0.0/8"}}, "--egress-allow needs --egress=public"},
 		{flags{hosted: true, egress: "none"}, `--egress: "none"`},
 		{flags{hosted: true, egressAllow: []string{"not a host"}}, "--egress-allow"},

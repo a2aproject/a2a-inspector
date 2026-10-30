@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,10 +111,12 @@ type StartupHeader struct {
 // Server is the inspector's HTTP handler.
 type Server struct {
 	opts Options
-	// transport and grpcOptions reach agents, for every session.
-	transport   http.RoundTripper
-	grpcOptions []grpc.DialOption
-	supports    func(binding, version string) bool
+	// transport reaches agents, for every session.
+	transport http.RoundTripper
+	// egress bounds the requests to agents over all sessions; nil means
+	// no limit.
+	egress   *rate.Limiter
+	supports func(binding, version string) bool
 	// local is the session of a local inspector; sessions are the ones of a
 	// hosted inspector.
 	local        *session
@@ -134,8 +137,12 @@ type Server struct {
 	cancel context.CancelFunc
 }
 
-// errEgressRate fails requests over Limits.EgressRate.
-var errEgressRate = errors.New("the inspector's limit of requests to agents was reached; try again in a moment")
+// Errors of requests to agents over Limits.
+var (
+	errSessionEgressRate = errors.New("your session's limit of requests to agents was reached; try again in a moment")
+	errClientEgressRate  = errors.New("the limit of requests to agents from your address or account was reached; try again in a moment")
+	errEgressRate        = errors.New("the inspector's limit of requests to agents was reached; try again in a moment")
+)
 
 // New returns a Server for opts.
 func New(opts Options) (*Server, error) {
@@ -163,11 +170,7 @@ func New(opts Options) (*Server, error) {
 			s.transport = opts.WrapHTTPTransport(s.transport)
 		}
 	}
-	if r := opts.Limits.EgressRate; r > 0 {
-		limiter := rate.NewLimiter(rate.Limit(r), max(1, int(2*r)))
-		s.transport = &limitedTransport{base: s.transport, limiter: limiter}
-		s.grpcOptions = limitedGRPC(limiter)
-	}
+	s.egress = newLimiter(opts.Limits.EgressRate, 2)
 	s.defaultWebhookURL = "http://" + net.JoinHostPort(loopbackIfUnspecified(opts.Host), strconv.Itoa(opts.Port))
 	if opts.WebhookBaseURL != "" {
 		u, err := NormalizeWebhookBaseURL(opts.WebhookBaseURL)
@@ -183,7 +186,7 @@ func New(opts Options) (*Server, error) {
 		go s.sweepSessions()
 	} else {
 		s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
-		s.local = s.newSession("")
+		s.local = s.newSession("", nil)
 		startup, err := s.newStartupConfig()
 		if err != nil {
 			return nil, err
@@ -268,39 +271,89 @@ func (s *Server) callContext(r *http.Request) (context.Context, context.CancelFu
 	}
 }
 
-// limitedTransport fails requests over the inspector's rate of requests to agents.
-type limitedTransport struct {
-	base    http.RoundTripper
-	limiter *rate.Limiter
-}
-
-func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !t.limiter.Allow() {
-		if req.Body != nil {
-			_ = req.Body.Close()
-		}
-		return nil, errEgressRate
+// newLimiter returns a limiter of perSecond events a second with a burst of
+// burst seconds' worth, or nil for no limit.
+func newLimiter(perSecond, burst float64) *rate.Limiter {
+	if perSecond <= 0 {
+		return nil
 	}
-	return t.base.RoundTrip(req)
+	return rate.NewLimiter(rate.Limit(perSecond), max(1, int(burst*perSecond)))
 }
 
-// limitedGRPC fails gRPC calls over the inspector's rate of requests to agents.
-func limitedGRPC(limiter *rate.Limiter) []grpc.DialOption {
-	exhausted := status.Error(codes.ResourceExhausted, errEgressRate.Error())
-	return []grpc.DialOption{
+// limit is a rate limit and the error for requests over it.
+type limit struct {
+	limiter *rate.Limiter
+	err     error
+}
+
+// limits are the rate limits a request has to pass, all of them. A nil
+// limiter doesn't limit.
+type limits []limit
+
+// allow takes a token from every limit, or from none: it returns the error
+// of the first limit without one, so a request one limit refuses doesn't
+// use up the others.
+func (ls limits) allow(now time.Time) error {
+	taken := make([]*rate.Reservation, 0, len(ls))
+	for _, l := range ls {
+		if l.limiter == nil {
+			continue
+		}
+		r := l.limiter.ReserveN(now, 1)
+		if !r.OK() || r.DelayFrom(now) > 0 {
+			r.CancelAt(now)
+			for _, t := range taken {
+				t.CancelAt(now)
+			}
+			return l.err
+		}
+		taken = append(taken, r)
+	}
+	return nil
+}
+
+// apply returns base and gRPC dial options that fail requests over the
+// limits. Without any limit, base comes back as is.
+func (ls limits) apply(base http.RoundTripper) (http.RoundTripper, []grpc.DialOption) {
+	if !slices.ContainsFunc(ls, func(l limit) bool { return l.limiter != nil }) {
+		return base, nil
+	}
+	exhausted := func() error {
+		if err := ls.allow(time.Now()); err != nil {
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
+		return nil
+	}
+	return &limitedTransport{base: base, limits: ls}, []grpc.DialOption{
 		grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-			if !limiter.Allow() {
-				return exhausted
+			if err := exhausted(); err != nil {
+				return err
 			}
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}),
 		grpc.WithChainStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-			if !limiter.Allow() {
-				return nil, exhausted
+			if err := exhausted(); err != nil {
+				return nil, err
 			}
 			return streamer(ctx, desc, cc, method, opts...)
 		}),
 	}
+}
+
+// limitedTransport fails requests over its limits.
+type limitedTransport struct {
+	base   http.RoundTripper
+	limits limits
+}
+
+func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := t.limits.allow(time.Now()); err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
+	return t.base.RoundTrip(req)
 }
 
 // webhookBaseURL returns the URL webhooks are created under.
@@ -430,13 +483,13 @@ func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) (*session, b
 		}
 		stale = c.Value
 	}
-	sess, err := s.sessions.renew(stale, func() *session { return s.newSession(randomString(32)) })
+	sess, err := s.sessions.renew(stale, s.clientOf(r), func(q *clientQuota) *session { return s.newSession(randomString(32), q) })
 	switch {
-	case errors.Is(err, errTooManySessions):
-		writeError(w, http.StatusTooManyRequests, capitalize(err.Error())+".")
+	case errors.Is(err, errFull):
+		writeError(w, http.StatusServiceUnavailable, capitalize(err.Error())+".")
 		return nil, false
 	case err != nil:
-		writeError(w, http.StatusServiceUnavailable, capitalize(err.Error())+".")
+		writeError(w, http.StatusTooManyRequests, capitalize(err.Error())+".")
 		return nil, false
 	}
 	http.SetCookie(w, &http.Cookie{
