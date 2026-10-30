@@ -97,6 +97,9 @@ type Entry struct {
 	Error string        `json:"error,omitempty"`
 	HTTP  *HTTPExchange `json:"http,omitempty"`
 	GRPC  *GRPCExchange `json:"grpc,omitempty"`
+
+	// size is roughly how many bytes the entry holds.
+	size int
 }
 
 // Done reports whether the exchange is over.
@@ -136,6 +139,8 @@ type Update struct {
 type Log struct {
 	mu       sync.Mutex
 	capacity int
+	maxBytes int
+	bytes    int
 	entries  []*Entry
 	nextID   int
 	subs     map[*subscriber]struct{}
@@ -146,12 +151,70 @@ type subscriber struct {
 	filter func(*Entry) bool
 }
 
-// NewLog returns a log that keeps the last capacity entries, or 500 if capacity is 0.
-func NewLog(capacity int) *Log {
+// NewLog returns a log that keeps the last capacity entries, or 500 if
+// capacity is 0. With maxBytes, it also drops the oldest entries to stay
+// under that many bytes, and stops adding frames or messages to an entry
+// that alone would exceed it.
+func NewLog(capacity, maxBytes int) *Log {
 	if capacity <= 0 {
 		capacity = defaultCapacity
 	}
-	return &Log{capacity: capacity, subs: map[*subscriber]struct{}{}}
+	return &Log{capacity: capacity, maxBytes: maxBytes, subs: map[*subscriber]struct{}{}}
+}
+
+// entrySize estimates the bytes an entry holds.
+func entrySize(e *Entry) int {
+	n := 256 + len(e.Error)
+	headers := func(hs []Header) {
+		for _, h := range hs {
+			n += len(h.Name) + len(h.Value) + 32
+		}
+	}
+	if h := e.HTTP; h != nil {
+		n += len(h.URL) + len(h.RequestBody) + len(h.ResponseBody)
+		headers(h.RequestHeaders)
+		headers(h.ResponseHeaders)
+		for _, f := range h.SSEFrames {
+			n += frameSize(f)
+		}
+	}
+	if g := e.GRPC; g != nil {
+		n += len(g.Target) + len(g.FullMethod) + len(g.StatusMessage)
+		headers(g.Metadata)
+		headers(g.Headers)
+		headers(g.Trailers)
+		for _, m := range g.Messages {
+			n += len(m.JSON) + 64
+		}
+	}
+	return n
+}
+
+func frameSize(f Frame) int { return len(f.Data) + len(f.Event) + len(f.ID) + 64 }
+
+// makeRoom drops the oldest entries other than keep until n more bytes fit,
+// and reports whether they do. Callers hold l.mu.
+func (l *Log) makeRoom(keep *Entry, n int) bool {
+	if l.maxBytes <= 0 {
+		return true
+	}
+	for i := 0; l.bytes+n > l.maxBytes && i < len(l.entries); {
+		if l.entries[i] == keep {
+			i++
+			continue
+		}
+		l.bytes -= l.entries[i].size
+		l.entries = slices.Delete(l.entries, i, i+1)
+	}
+	return l.bytes+n <= l.maxBytes
+}
+
+// resize records an entry's new size after a change. Callers hold l.mu.
+func (l *Log) resize(e *Entry) {
+	size := entrySize(e)
+	l.bytes += size - e.size
+	e.size = size
+	l.makeRoom(e, 0)
 }
 
 // Get returns a copy of the entry with the given ID.
@@ -226,8 +289,12 @@ func (l *Log) add(e *Entry) string {
 	}
 	l.entries = append(l.entries, e)
 	if len(l.entries) > l.capacity {
+		for _, old := range l.entries[:len(l.entries)-l.capacity] {
+			l.bytes -= old.size
+		}
 		l.entries = slices.Delete(l.entries, 0, len(l.entries)-l.capacity)
 	}
+	l.resize(e)
 	l.publish(e, Update{Entry: e.clone()})
 	return e.ID
 }
@@ -242,6 +309,7 @@ func (l *Log) update(id string, change func(e *Entry)) {
 		return
 	}
 	change(e)
+	l.resize(e)
 	l.publish(e, Update{Entry: e.clone()})
 }
 
@@ -270,7 +338,7 @@ func (l *Log) addFrame(id string, f Frame) {
 	if e == nil || e.HTTP == nil {
 		return
 	}
-	if len(e.HTTP.SSEFrames) >= MaxFrames {
+	if len(e.HTTP.SSEFrames) >= MaxFrames || !l.makeRoom(e, frameSize(f)) {
 		if !e.HTTP.Truncated {
 			e.HTTP.Truncated = true
 			l.publish(e, Update{Entry: e.clone()})
@@ -278,6 +346,8 @@ func (l *Log) addFrame(id string, f Frame) {
 		return
 	}
 	e.HTTP.SSEFrames = append(e.HTTP.SSEFrames, f)
+	e.size += frameSize(f)
+	l.bytes += frameSize(f)
 	l.publish(e, Update{EntryID: id, Frame: &f})
 }
 
@@ -289,7 +359,7 @@ func (l *Log) addMessage(id string, m GRPCMessage) {
 	if e == nil || e.GRPC == nil {
 		return
 	}
-	if len(e.GRPC.Messages) >= MaxFrames {
+	if len(e.GRPC.Messages) >= MaxFrames || !l.makeRoom(e, len(m.JSON)+64) {
 		if !e.GRPC.Truncated {
 			e.GRPC.Truncated = true
 			l.publish(e, Update{Entry: e.clone()})
@@ -297,5 +367,7 @@ func (l *Log) addMessage(id string, m GRPCMessage) {
 		return
 	}
 	e.GRPC.Messages = append(e.GRPC.Messages, m)
+	e.size += len(m.JSON) + 64
+	l.bytes += len(m.JSON) + 64
 	l.publish(e, Update{EntryID: id, Message: &m})
 }

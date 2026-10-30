@@ -156,4 +156,24 @@ describe('findAgent', () => {
     expect(findAgent(agents, cardUrl)?.id).toBe('a');
     expect(findAgent(agents, 'localhost:8888')).toBeUndefined();
   });
+
+  it('drops connections and stored secrets when the backend lost its session, and keeps the conversation', () => {
+    const connection = { id: 'conn-1', interface: iface('JSONRPC'), custom: false, availableInterfaces: [], headers: [], extensions: [], contextId: 'ctx-1', openTask: { id: 't-1', state: 'input-required' } };
+    const settings = { ...defaultSettings, authType: 'bearer' as const, secret: { source: 'value' as const, value: '', ref: 'sec-1', masked: '••••' } };
+    const state = run(
+      { type: 'add', id: 'a', url: cardUrl, settings },
+      { type: 'resolved', id: 'a', result: resolved('A') },
+      { type: 'connected', id: 'a', connection, key: 'k', settings },
+      { type: 'sessionReset' },
+    );
+    const a = state.agents[0]!;
+    expect(a.connection).toBeUndefined();
+    expect(a.connectionKey).toBeUndefined();
+    expect(a.resume).toEqual({ contextId: 'ctx-1', openTask: { id: 't-1', state: 'input-required' } });
+    expect(a.settings.secret).toEqual({ source: 'value', value: '', lost: true });
+    expect(a.connectionIds).toEqual(['conn-1']);
+
+    const again = agentsReducer(state, { type: 'connected', id: 'a', connection: { ...connection, id: 'conn-2' }, key: 'k', settings });
+    expect(again.agents[0]!.resume).toBeUndefined();
+  });
 });

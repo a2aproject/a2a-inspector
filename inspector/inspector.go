@@ -35,10 +35,12 @@ import (
 // transports.
 type Options struct {
 	// Transports adds protocol bindings beyond JSON-RPC, HTTP+JSON and gRPC.
+	// The egress policy (--egress=public, the default with --hosted) can't
+	// see their connections, so a transport has to limit them itself.
 	Transports []Transport
 	// WrapHTTPTransport, if set, wraps the transport that sends the
-	// inspector's HTTP requests to agents. The traffic log shows requests as
-	// they are before it.
+	// inspector's HTTP requests to agents, which applies the egress policy.
+	// The traffic log shows requests as they are before it.
 	WrapHTTPTransport func(http.RoundTripper) http.RoundTripper
 }
 

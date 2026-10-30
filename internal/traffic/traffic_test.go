@@ -121,7 +121,7 @@ func TestMaskValue(t *testing.T) {
 
 func TestLogSubscribe(t *testing.T) {
 	t.Parallel()
-	l := NewLog(2)
+	l := NewLog(2, 0)
 	first := l.add(&Entry{ConnectionID: "a", HTTP: &HTTPExchange{}})
 	snapshot, updates, cancel := l.Subscribe(func(e *Entry) bool { return e.ConnectionID == "a" })
 	defer cancel()
@@ -148,9 +148,47 @@ func TestLogSubscribe(t *testing.T) {
 	}
 }
 
+func TestLogByteBudget(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("x", 4000)
+	l := NewLog(0, 10_000)
+	first := l.add(&Entry{HTTP: &HTTPExchange{RequestBody: body}})
+	second := l.add(&Entry{HTTP: &HTTPExchange{RequestBody: body}})
+	third := l.add(&Entry{HTTP: &HTTPExchange{RequestBody: body}})
+	if _, ok := l.Get(first); ok {
+		t.Error("the oldest entry survived going over the budget")
+	}
+	for _, id := range []string{second, third} {
+		if _, ok := l.Get(id); !ok {
+			t.Errorf("entry %s was dropped", id)
+		}
+	}
+
+	// A stream that alone exceeds the budget pushes out the others, then stops growing.
+	stream := l.add(&Entry{HTTP: &HTTPExchange{}})
+	for range 20 {
+		l.addFrame(stream, Frame{Data: strings.Repeat("y", 1000)})
+	}
+	e, ok := l.Get(stream)
+	if !ok {
+		t.Fatal("the stream entry was dropped")
+	}
+	if !e.HTTP.Truncated || len(e.HTTP.SSEFrames) == 0 || len(e.HTTP.SSEFrames) >= 20 {
+		t.Fatalf("stream entry: truncated %v, %d frames", e.HTTP.Truncated, len(e.HTTP.SSEFrames))
+	}
+	if _, ok := l.Get(third); ok {
+		t.Error("older entries survived a stream that needed their room")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.bytes > l.maxBytes || l.bytes != entrySize(e) {
+		t.Errorf("bytes = %d, want %d (the stream entry) and at most %d", l.bytes, entrySize(e), l.maxBytes)
+	}
+}
+
 func TestLogDropsSlowSubscribers(t *testing.T) {
 	t.Parallel()
-	l := NewLog(0)
+	l := NewLog(0, 0)
 	id := l.add(&Entry{HTTP: &HTTPExchange{}})
 	_, updates, cancel := l.Subscribe(nil)
 	defer cancel()
@@ -178,7 +216,7 @@ func TestTransportOverrideAfterRedirect(t *testing.T) {
 		got = string(b)
 	}))
 	defer agent.Close()
-	client := &http.Client{Transport: &Transport{Log: NewLog(0)}}
+	client := &http.Client{Transport: &Transport{Log: NewLog(0, 0)}}
 	ctx := WithCall(context.Background(), &Call{MessageOverride: []byte(`{"raw":1}`)})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, agent.URL+"/a2a", strings.NewReader(`{"message":{"placeholder":1}}`))
 	resp, err := client.Do(req)
@@ -207,7 +245,7 @@ func TestTransport(t *testing.T) {
 		}
 	}))
 	defer agent.Close()
-	l := NewLog(0)
+	l := NewLog(0, 0)
 	client := &http.Client{Transport: &Transport{Log: l}}
 
 	var frames []string

@@ -14,6 +14,8 @@ interface Props {
   bindings: string[];
   /** Whether the next message reconnects. */
   stale: boolean;
+  /** Whether secrets can come from the inspector's environment variables. */
+  envSecrets: boolean;
   onSelectInterface: (index: number) => void;
   onAddInterface: (iface: AgentInterface) => void;
   onRemoveInterface: (index: number) => void;
@@ -33,7 +35,7 @@ export function CardView(props: Props) {
 }
 
 /** The interface picker and connection settings, for every agent. */
-function Connect({ agent, bindings, stale, onSelectInterface, onAddInterface, onRemoveInterface, onSettings }: Props & { agent: AgentEntry }) {
+function Connect({ agent, bindings, stale, envSecrets, onSelectInterface, onAddInterface, onRemoveInterface, onSettings }: Props & { agent: AgentEntry }) {
   return (
     <>
       <InterfacePicker
@@ -46,7 +48,7 @@ function Connect({ agent, bindings, stale, onSelectInterface, onAddInterface, on
         onRemove={onRemoveInterface}
         emptyText={agent.result?.payload ? undefined : "Add the agent's interface by hand to send it messages."}
       />
-      <ConnectionSettings settings={agent.settings} onChange={onSettings} connection={agent.connection} stale={stale} />
+      <ConnectionSettings settings={agent.settings} onChange={onSettings} connection={agent.connection} stale={stale} envSecrets={envSecrets} />
     </>
   );
 }

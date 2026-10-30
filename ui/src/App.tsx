@@ -1,7 +1,17 @@
 import { type CSSProperties, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { type AgentEntry, agentsReducer, countFindings, findAgent, initialAgentsState, selectedInterfaceOf, type TaskActivity } from './agents';
+import {
+  type AgentEntry,
+  afterSessionLoss,
+  agentsReducer,
+  countFindings,
+  findAgent,
+  initialAgentsState,
+  selectedInterfaceOf,
+  type TaskActivity,
+  withoutConnection,
+} from './agents';
 import { viewPayload, viewPushConfig, viewPushConfigs } from './a2a/view';
-import { ApiError, api } from './api/client';
+import { ApiError, api, isSessionRenewed, isUnknownConnection, onSessionRenewed } from './api/client';
 import type { AgentInterface, AgentResult, Config, Connection, ConnectionRequest, ListTasksQuery, SendRequest } from './api/types';
 import { asObject, asObjects } from './card';
 import { AgentList } from './components/AgentList';
@@ -14,7 +24,15 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { TrafficPanel } from './components/TrafficPanel';
 import { ValidationPanel } from './components/ValidationPanel';
 import { type Layout, type Side, useLayout } from './layout';
-import { type ConnectionSettings, defaultSettings, settingsAfterConnect, settingsFromHeaders, settingsRequest } from './settings';
+import {
+  type ConnectionSettings,
+  defaultSettings,
+  hasLostSecrets,
+  settingsAfterConnect,
+  settingsAfterSessionLoss,
+  settingsFromHeaders,
+  settingsRequest,
+} from './settings';
 import { useNotifications, webhookWarning } from './notifications';
 import { taskRef } from './tasks';
 import { useTraffic } from './traffic';
@@ -50,6 +68,23 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Runs a request again once if a shared inspector renewed the session, which sets its new cookie. */
+async function retryRenewed<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isSessionRenewed(err)) throw err;
+    return run();
+  }
+}
+
+/** "10 minutes", for the hosted notice. */
+function duration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 120) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return `${Math.round(minutes / 60)} hours`;
+}
+
 let nextItem = 1;
 const itemId = () => `item-${nextItem++}`;
 
@@ -75,6 +110,13 @@ function activityOf(label: string, out: Outcome): TaskActivity {
 export function App() {
   const [session, setSession] = useState<Session>({ state: 'loading' });
   const [{ agents, selectedId }, dispatch] = useReducer(agentsReducer, initialAgentsState);
+  // The latest agents, for the session renewal listener.
+  const agentsRef = useRef(agents);
+  useEffect(() => {
+    agentsRef.current = agents;
+  }, [agents]);
+  // Set when a shared inspector replaced the session the agents were connected in.
+  const [renewed, setRenewed] = useState(false);
   const nextId = useRef(1);
   const started = useRef(false);
   const streams = useRef(new Map<string, AbortController>());
@@ -110,8 +152,17 @@ export function App() {
       dispatch(
         existing ? { type: 'refresh', id } : { type: 'add', id, url, settings: start?.settings, prefer: start?.prefer?.preferences },
       );
-      const { auth, headers } = settingsRequest(existing?.settings ?? start?.settings ?? defaultSettings);
-      api.resolveCard(url, { auth, headers }).then(
+      const settings = existing?.settings ?? start?.settings ?? defaultSettings;
+      const resolve = (s: ConnectionSettings) => {
+        const { auth, headers } = settingsRequest(s);
+        return api.resolveCard(url, { auth, headers });
+      };
+      resolve(settings)
+        .catch((err: unknown) => {
+          if (!isSessionRenewed(err)) throw err;
+          return resolve(settingsAfterSessionLoss(settings));
+        })
+        .then(
         (result) => dispatch({ type: 'resolved', id, result }),
         (err: unknown) => dispatch({ type: 'failed', id, error: message(err) }),
       );
@@ -119,11 +170,22 @@ export function App() {
     [agents],
   );
 
+  useEffect(
+    () =>
+      onSessionRenewed(() => {
+        // Connections, and secrets stored with them, belong to the old session.
+        const lost = agentsRef.current.some((a) => a.connection || a.settings.secret.ref || a.settings.headers.some((h) => h.ref));
+        dispatch({ type: 'sessionReset' });
+        if (lost) setRenewed(true);
+      }),
+    [],
+  );
+
   useEffect(() => {
     // Runs once, also under StrictMode's double effects in development.
     if (started.current) return;
     started.current = true;
-    api.config().then(
+    retryRenewed(api.config).then(
       (config) => {
         setSession({ state: 'ready', config });
         const startup = config.startup;
@@ -150,6 +212,9 @@ export function App() {
     if (!iface) {
       throw new Error('Pick an interface first.');
     }
+    if (hasLostSecrets(agent.settings)) {
+      throw new Error("The inspector's session ended, and the credentials you entered with it. Enter them again in the connection settings.");
+    }
     if (agent.connection && agent.connectionKey === connectionKey(iface, agent.settings)) {
       return agent.connection;
     }
@@ -160,9 +225,9 @@ export function App() {
     const req: ConnectionRequest = {
       ...settingsRequest(agent.settings),
       interface: { url: iface.url, protocolBinding: iface.protocolBinding, protocolVersion: iface.protocolVersion, tenant: iface.tenant },
-      // A new connection, say after a settings change, continues the conversation.
-      contextId: agent.resetContext ? undefined : agent.connection?.contextId,
-      openTask: agent.resetContext ? undefined : agent.connection?.openTask,
+      // A new connection, say after a settings change or a new session, continues the conversation.
+      contextId: agent.resetContext ? undefined : (agent.connection?.contextId ?? agent.resume?.contextId),
+      openTask: agent.resetContext ? undefined : (agent.connection?.openTask ?? agent.resume?.openTask),
       replaces: agent.connection?.id,
     };
     if (agent.result?.payload) {
@@ -177,6 +242,20 @@ export function App() {
     const settings = settingsAfterConnect(agent.settings, conn);
     dispatch({ type: 'connected', id: agent.id, connection: conn, key: connectionKey(iface, settings), settings });
     return conn;
+  }
+
+  /**
+   * Runs an operation on the agent's connection, connecting first if needed. When a shared inspector
+   * replaced the session or dropped the connection to make room for another, it connects again once.
+   */
+  async function withConnection<T>(agent: AgentEntry, run: (conn: Connection) => Promise<T>): Promise<T> {
+    try {
+      return await run(await connect(agent));
+    } catch (err) {
+      if (isSessionRenewed(err)) return run(await connect(afterSessionLoss(agent)));
+      if (isUnknownConnection(err) && agent.connection) return run(await connect(withoutConnection(agent)));
+      throw err;
+    }
   }
 
   /** Sends a message and reports whether the agent answered without an error. */
@@ -194,7 +273,6 @@ export function App() {
     const abort = new AbortController();
     streams.current.set(id, abort);
     try {
-      const conn = await connect(agent);
       const onResult = (result: AgentResult) => {
         answered ||= !result.call.error;
         dispatch({ type: 'chat', id, item: { id: itemId(), type: 'result', result, binding, time: Date.now() } });
@@ -202,11 +280,13 @@ export function App() {
         const ref = taskRef(result, binding);
         if (ref) dispatch({ type: 'task', id, ...ref, time: Date.now() });
       };
-      if (stream) {
-        await api.stream(conn.id, req, onResult, abort.signal);
-      } else {
-        onResult(await api.send(conn.id, req, abort.signal));
-      }
+      await withConnection(agent, async (conn) => {
+        if (stream) {
+          await api.stream(conn.id, req, onResult, abort.signal);
+        } else {
+          onResult(await api.send(conn.id, req, abort.signal));
+        }
+      });
     } catch (err) {
       if (abort.signal.aborted) {
         dispatch({ type: 'chat', id, item: { id: itemId(), type: 'note', message: 'Stopped.', time: Date.now() } });
@@ -224,8 +304,7 @@ export function App() {
   async function call(agent: AgentEntry, run: (connectionId: string) => Promise<AgentResult>): Promise<Outcome> {
     const binding = selectedInterfaceOf(agent)?.protocolBinding ?? '';
     try {
-      const conn = await connect(agent);
-      const result = await run(conn.id);
+      const result = await withConnection(agent, (conn) => run(conn.id));
       dispatch({ type: 'conversation', id: agent.id, contextId: result.contextId, openTask: result.openTask, source: 'other' });
       return { result, binding };
     } catch (err) {
@@ -272,15 +351,16 @@ export function App() {
     const note = (text: string) => dispatch({ type: 'task', id: agent.id, taskId, time: Date.now(), activity: { id: itemId(), type: 'note', message: text, time: Date.now() } });
     const binding = selectedInterfaceOf(agent)?.protocolBinding ?? '';
     try {
-      const conn = await connect(agent);
-      await api.subscribeTask(
-        conn.id,
-        taskId,
-        (result) => {
-          recordTask(agent, taskId, operationLabels.subscribe, { result, binding });
-          dispatch({ type: 'conversation', id: agent.id, contextId: result.contextId, openTask: result.openTask, source: 'other' });
-        },
-        abort.signal,
+      await withConnection(agent, (conn) =>
+        api.subscribeTask(
+          conn.id,
+          taskId,
+          (result) => {
+            recordTask(agent, taskId, operationLabels.subscribe, { result, binding });
+            dispatch({ type: 'conversation', id: agent.id, contextId: result.contextId, openTask: result.openTask, source: 'other' });
+          },
+          abort.signal,
+        ),
       );
       note('The subscription ended.');
     } catch (err) {
@@ -388,6 +468,23 @@ export function App() {
           </div>
         </div>
       </header>
+      {config?.mode === 'hosted' && (
+        <p className="hosted-notice" role="note">
+          Shared instance: requests to agents are sent from this server. Traffic and credentials you enter are kept in memory for your session,
+          dropped after {duration(config.idleTimeoutSeconds ?? 600)} without an open tab, and never stored.
+        </p>
+      )}
+      {renewed && (
+        <div className="hosted-notice hosted-renewed" role="status">
+          <p>
+            Your session ended, so the inspector started a new one. The traffic log was cleared, and credentials you entered need to be entered again.
+            Conversations continue.
+          </p>
+          <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setRenewed(false)}>
+            ×
+          </button>
+        </div>
+      )}
       {session.state === 'unauthorized' && (
         <main className="message-page">
           <div className="notice">
@@ -446,6 +543,7 @@ export function App() {
             agent={selected}
             bindings={bindings}
             stale={stale}
+            envSecrets={config?.features.envSecrets ?? true}
             onSelectInterface={(index) => selected && dispatch({ type: 'selectInterface', id: selected.id, index })}
             onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
             onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, api } from './client';
+import { ApiError, api, isSessionRenewed, isUnknownConnection, onSessionRenewed } from './client';
 
 describe('api', () => {
   it('posts JSON and returns the decoded body', async () => {
@@ -17,6 +17,20 @@ describe('api', () => {
     const err = await api.config().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 401, message: 'No valid session.' });
+  });
+
+  it('tells the listener when a shared inspector renewed the session', async () => {
+    const listener = vi.fn();
+    const stop = onSessionRenewed(listener);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"error":{"message":"Your session ended.","code":"sessionRenewed"}}', { status: 401 }));
+    const err = await api.config().catch((e: unknown) => e);
+    stop();
+    expect(err).toMatchObject({ status: 401, code: 'sessionRenewed' });
+    expect(isSessionRenewed(err)).toBe(true);
+    expect(isSessionRenewed(new ApiError('No valid session.', 401))).toBe(false);
+    expect(isUnknownConnection(new ApiError('Unknown connection.', 404, 'unknownConnection'))).toBe(true);
+    expect(isUnknownConnection(new ApiError('Unknown API endpoint.', 404))).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the status line for bodies that are not JSON', async () => {

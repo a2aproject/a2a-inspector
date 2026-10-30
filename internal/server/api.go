@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"mime"
 	"net/http"
 	"slices"
@@ -75,10 +76,17 @@ type callError struct {
 type features struct {
 	Serve    bool `json:"serve"`
 	Webhooks bool `json:"webhooks"`
+	// EnvSecrets is set when secrets can refer to the inspector's
+	// environment variables.
+	EnvSecrets bool `json:"envSecrets"`
 }
 
 type configResponse struct {
+	// Mode is "local" or "hosted".
 	Mode string `json:"mode"`
+	// IdleTimeoutSeconds is how long a hosted session lives without an open
+	// tab or a request.
+	IdleTimeoutSeconds int `json:"idleTimeoutSeconds,omitempty"`
 	// AgentCardURL is the agent given with --agent-card, which the UI opens on start.
 	AgentCardURL string `json:"agentCardUrl,omitempty"`
 	// Startup is how to connect to the agent opened on start.
@@ -88,8 +96,8 @@ type configResponse struct {
 	Bindings []string `json:"bindings"`
 	// WebhookBaseURL is the URL new webhooks are created under, and
 	// DefaultWebhookBaseURL the inspector's own address it defaults to.
-	WebhookBaseURL        string `json:"webhookBaseUrl"`
-	DefaultWebhookBaseURL string `json:"defaultWebhookBaseUrl"`
+	WebhookBaseURL        string `json:"webhookBaseUrl,omitempty"`
+	DefaultWebhookBaseURL string `json:"defaultWebhookBaseUrl,omitempty"`
 }
 
 // startupConfig is the agent given on the command line.
@@ -119,7 +127,7 @@ func (s *Server) newStartupConfig() (*startupConfig, error) {
 			continue
 		}
 		value := h.Value
-		sv, err := s.secrets.store(secretInput{Value: &value})
+		sv, err := s.local.secrets.store(secretInput{Value: &value})
 		if err != nil {
 			return nil, err
 		}
@@ -135,11 +143,19 @@ func (s *Server) config() configResponse {
 			bindings = append(bindings, t.Binding)
 		}
 	}
+	if s.opts.Hosted {
+		return configResponse{
+			Mode:               "hosted",
+			IdleTimeoutSeconds: int(s.opts.Limits.IdleTimeout.Seconds()),
+			Features:           features{},
+			Bindings:           bindings,
+		}
+	}
 	return configResponse{
 		Mode:                  "local",
 		AgentCardURL:          s.opts.AgentCardURL,
 		Startup:               s.startup,
-		Features:              features{Webhooks: true},
+		Features:              features{Webhooks: true, EnvSecrets: true},
 		Bindings:              bindings,
 		WebhookBaseURL:        s.webhookBaseURL(),
 		DefaultWebhookBaseURL: s.defaultWebhookURL,
@@ -207,6 +223,7 @@ type cardResolveResponse struct {
 }
 
 func (s *Server) handleCardResolve(w http.ResponseWriter, r *http.Request) {
+	sess := sessionOf(r)
 	var req cardResolveRequest
 	if !decodeRequest(w, r, &req) {
 		return
@@ -217,17 +234,17 @@ func (s *Server) handleCardResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	headers, secrets, err := s.headerParams(req.Auth, req.Headers)
+	headers, secrets, err := headerParams(sess, req.Auth, req.Headers)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	resp := cardResolveResponse{CardURL: cardURL, Interfaces: []agents.Interface{}}
-	tc := &traffic.Call{Secrets: secrets}
+	tc := &traffic.Call{Secrets: secrets, Headers: slices.Collect(maps.Keys(headers))}
 	ctx, cancel := context.WithTimeout(r.Context(), cardTimeout)
 	defer cancel()
-	res, err := agents.FetchCard(traffic.WithCall(ctx, tc), s.client, cardURL, headers)
+	res, err := agents.FetchCard(traffic.WithCall(ctx, tc), sess.client, cardURL, headers)
 	resp.Call.TrafficEntryID = tc.LastEntryID()
 	if err != nil {
 		resp.Call.Error = &callError{Message: err.Error()}
@@ -293,10 +310,11 @@ func (s *Server) handleCardValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchCard fetches a card for a connection, or returns why it couldn't.
-func (s *Server) fetchCard(r *http.Request, cardURL string, headers http.Header, secrets []string) (*agents.CardResponse, string) {
+func fetchCard(r *http.Request, sess *session, cardURL string, headers http.Header, secrets []string) (*agents.CardResponse, string) {
 	ctx, cancel := context.WithTimeout(r.Context(), cardTimeout)
 	defer cancel()
-	res, err := agents.FetchCard(traffic.WithCall(ctx, &traffic.Call{Secrets: secrets}), s.client, cardURL, headers)
+	tc := &traffic.Call{Secrets: secrets, Headers: slices.Collect(maps.Keys(headers))}
+	res, err := agents.FetchCard(traffic.WithCall(ctx, tc), sess.client, cardURL, headers)
 	switch {
 	case err != nil:
 		return nil, "Couldn't fetch the card: " + err.Error()
@@ -312,7 +330,7 @@ func (s *Server) fetchCard(r *http.Request, cardURL string, headers http.Header,
 func (s *Server) describeCard(raw []byte, in validate.CardInput, version string) (*agentPayload, agents.CardInfo) {
 	var card map[string]any
 	_ = json.Unmarshal(raw, &card) // A card that isn't an object is reported by validate.Card.
-	info := agents.DescribeCard(card, s.dialer.Supports)
+	info := agents.DescribeCard(card, s.supports)
 	if version != "" {
 		info.ProtocolVersion, info.Versions, info.VersionDetected = version, []string{version}, true
 	}
@@ -373,11 +391,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 type errorResponse struct {
 	Error struct {
 		Message string `json:"message"`
+		// Code names errors the UI acts on, such as "sessionRenewed".
+		Code string `json:"code,omitempty"`
 	} `json:"error"`
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorCode(w, status, "", message)
+}
+
+func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
 	var resp errorResponse
 	resp.Error.Message = message
+	resp.Error.Code = code
 	writeJSON(w, status, resp)
 }

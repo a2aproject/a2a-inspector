@@ -23,16 +23,23 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/a2aproject/a2a-inspector/internal/agents"
-	"github.com/a2aproject/a2a-inspector/internal/traffic"
+	"github.com/a2aproject/a2a-inspector/internal/egress"
+	"golang.org/x/time/rate"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // contentSecurityPolicy allows only the inspector's own scripts, styles and API.
@@ -47,8 +54,19 @@ type Options struct {
 	// Port is the port the server listens on. It's part of the session
 	// cookie's name, because browsers share cookies across ports.
 	Port int
-	// Token is the per-run session token, given to the user in the URL.
+	// Token is the per-run session token, given to the user in the URL. A
+	// hosted inspector has none.
 	Token string
+	// Hosted runs the inspector as a shared service: every browser gets its
+	// own session from a cookie, within Limits, and the features that would
+	// expose the server or its environment are off.
+	Hosted bool
+	Limits Limits
+	// Egress, if set, limits which addresses the inspector connects to.
+	Egress *egress.Policy
+	// Logger, if set, receives hosted-mode events: sessions and blocked
+	// destinations. It never gets traffic.
+	Logger *log.Logger
 	// AgentCardURL, if set, is the agent the UI opens on start.
 	AgentCardURL string
 	// Endpoint, if set, is an interface the UI connects to on start without
@@ -62,8 +80,12 @@ type Options struct {
 	// UI holds the built UI, with index.html at its root.
 	UI fs.FS
 	// HTTPTransport sends the inspector's requests to agents. It defaults to
-	// http.DefaultTransport; the inspector records the traffic around it.
-	HTTPTransport http.RoundTripper
+	// http.DefaultTransport, or the Egress policy's transport, wrapped with
+	// WrapHTTPTransport; the inspector records the traffic around it. A
+	// transport given here is used as is, so it has to apply the Egress
+	// policy to HTTP itself.
+	HTTPTransport     http.RoundTripper
+	WrapHTTPTransport func(http.RoundTripper) http.RoundTripper
 	// Transports adds protocol bindings beyond the core ones.
 	Transports []agents.Transport
 	// WebhookBaseURL is the URL agents reach the inspector's webhook
@@ -88,13 +110,17 @@ type StartupHeader struct {
 
 // Server is the inspector's HTTP handler.
 type Server struct {
-	opts         Options
-	traffic      *traffic.Log
-	client       *http.Client
-	dialer       *agents.Dialer
-	secrets      *secretStore
-	conns        *connections
-	hooks        *hooks
+	opts Options
+	// transport reaches agents, for every session.
+	transport http.RoundTripper
+	// egress bounds the requests to agents over all sessions; nil means
+	// no limit.
+	egress   *rate.Limiter
+	supports func(binding, version string) bool
+	// local is the session of a local inspector; sessions are the ones of a
+	// hosted inspector.
+	local        *session
+	sessions     *sessions
 	startup      *startupConfig
 	mux          *http.ServeMux
 	cookieName   string
@@ -111,33 +137,40 @@ type Server struct {
 	cancel context.CancelFunc
 }
 
+// Errors of requests to agents over Limits.
+var (
+	errSessionEgressRate = errors.New("your session's limit of requests to agents was reached; try again in a moment")
+	errClientEgressRate  = errors.New("the limit of requests to agents from your address or account was reached; try again in a moment")
+	errEgressRate        = errors.New("the inspector's limit of requests to agents was reached; try again in a moment")
+)
+
 // New returns a Server for opts.
 func New(opts Options) (*Server, error) {
-	if opts.Token == "" {
+	switch {
+	case opts.Token == "" && !opts.Hosted:
 		return nil, errors.New("server: empty session token")
-	}
-	if opts.UI == nil {
+	case opts.UI == nil:
 		return nil, errors.New("server: no UI files")
+	case opts.Hosted && (opts.AgentCardURL != "" || opts.Endpoint != nil || len(opts.StartupHeaders) > 0 || opts.WebhookBaseURL != ""):
+		return nil, errors.New("server: a hosted inspector has no startup agent, credentials or webhooks")
 	}
-	log := traffic.NewLog(0)
-	// No client timeout: streams last as long as the UI follows them, and
-	// each call bounds itself with its context.
-	client := &http.Client{Transport: &traffic.Transport{Log: log, Base: opts.HTTPTransport}}
 	s := &Server{
-		opts:    opts,
-		traffic: log,
-		client:  client,
-		dialer: &agents.Dialer{
-			HTTPClient:      client,
-			GRPCDialOptions: log.DialOptions(),
-			Transports:      opts.Transports,
-		},
-		secrets:    newSecretStore(),
-		conns:      &connections{items: map[string]*connection{}},
-		hooks:      newHooks(),
+		opts:       opts,
+		transport:  opts.HTTPTransport,
+		supports:   (&agents.Dialer{Transports: opts.Transports}).Supports,
 		mux:        http.NewServeMux(),
 		cookieName: fmt.Sprintf("a2a_inspector_%d", opts.Port),
 	}
+	if s.transport == nil {
+		s.transport = http.DefaultTransport
+		if opts.Egress != nil {
+			s.transport = opts.Egress.Transport()
+		}
+		if opts.WrapHTTPTransport != nil {
+			s.transport = opts.WrapHTTPTransport(s.transport)
+		}
+	}
+	s.egress = newLimiter(opts.Limits.EgressRate, 2)
 	s.defaultWebhookURL = "http://" + net.JoinHostPort(loopbackIfUnspecified(opts.Host), strconv.Itoa(opts.Port))
 	if opts.WebhookBaseURL != "" {
 		u, err := NormalizeWebhookBaseURL(opts.WebhookBaseURL)
@@ -147,15 +180,21 @@ func New(opts Options) (*Server, error) {
 		s.webhookURL = u
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
-	s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
-	startup, err := s.newStartupConfig()
-	if err != nil {
-		return nil, err
+	if opts.Hosted {
+		s.anyHost = true
+		s.sessions = newSessions(opts.Limits, s.logf)
+		go s.sweepSessions()
+	} else {
+		s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
+		s.local = s.newSession("", nil)
+		startup, err := s.newStartupConfig()
+		if err != nil {
+			return nil, err
+		}
+		s.startup = startup
 	}
-	s.startup = startup
 
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
-	s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
 	s.mux.HandleFunc("POST /api/card:resolve", s.handleCardResolve)
 	s.mux.HandleFunc("POST /api/card:validate", s.handleCardValidate)
 	s.mux.HandleFunc("POST /api/connections", s.handleCreateConnection)
@@ -172,8 +211,11 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.handleDeletePushConfig)
 	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.handleExtendedCard)
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
-	s.mux.HandleFunc("GET /api/hooks", s.handleHooks)
-	s.mux.HandleFunc("POST /hooks/{hook}", s.handleHook)
+	if s.webhooks() {
+		s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
+		s.mux.HandleFunc("GET /api/hooks", s.handleHooks)
+		s.mux.HandleFunc("POST /hooks/{hook}", s.handleHook)
+	}
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Unknown API endpoint.")
 	})
@@ -185,23 +227,133 @@ func New(opts Options) (*Server, error) {
 // server can shut down, and closes the connections to agents.
 func (s *Server) Close() {
 	s.cancel()
-	s.conns.mu.Lock()
-	defer s.conns.mu.Unlock()
-	for id, c := range s.conns.items {
-		_ = c.client.Destroy()
-		delete(s.conns.items, id)
+	if s.local != nil {
+		s.local.close()
+	}
+	if s.sessions != nil {
+		s.sessions.closeAll()
 	}
 }
 
-// callContext is the context of a call to an agent: it ends with the request
-// or when the server closes.
+// webhooks reports whether the webhook receiver is on. A hosted inspector
+// sits behind whatever controls access to it, which agents can't pass.
+func (s *Server) webhooks() bool { return !s.opts.Hosted }
+
+func (s *Server) logf(format string, args ...any) {
+	if s.opts.Logger != nil {
+		s.opts.Logger.Printf(format, args...)
+	}
+}
+
+// sweepSessions ends idle and old sessions until the server closes.
+func (s *Server) sweepSessions() {
+	interval := min(cmp.Or(s.opts.Limits.IdleTimeout, time.Minute)/4, 30*time.Second)
+	ticker := time.NewTicker(max(interval, time.Second))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.sessions.sweep(now)
+		}
+	}
+}
+
+// callContext is the context of a call to an agent: it ends with the
+// request, or when the session ends or the server closes.
 func (s *Server) callContext(r *http.Request) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(r.Context())
-	stop := context.AfterFunc(s.ctx, cancel)
+	stop := context.AfterFunc(sessionOf(r).ctx, cancel)
 	return ctx, func() {
 		stop()
 		cancel()
 	}
+}
+
+// newLimiter returns a limiter of perSecond events a second with a burst of
+// burst seconds' worth, or nil for no limit.
+func newLimiter(perSecond, burst float64) *rate.Limiter {
+	if perSecond <= 0 {
+		return nil
+	}
+	return rate.NewLimiter(rate.Limit(perSecond), max(1, int(burst*perSecond)))
+}
+
+// limit is a rate limit and the error for requests over it.
+type limit struct {
+	limiter *rate.Limiter
+	err     error
+}
+
+// limits are the rate limits a request has to pass, all of them. A nil
+// limiter doesn't limit.
+type limits []limit
+
+// allow takes a token from every limit, or from none: it returns the error
+// of the first limit without one, so a request one limit refuses doesn't
+// use up the others.
+func (ls limits) allow(now time.Time) error {
+	taken := make([]*rate.Reservation, 0, len(ls))
+	for _, l := range ls {
+		if l.limiter == nil {
+			continue
+		}
+		r := l.limiter.ReserveN(now, 1)
+		if !r.OK() || r.DelayFrom(now) > 0 {
+			r.CancelAt(now)
+			for _, t := range taken {
+				t.CancelAt(now)
+			}
+			return l.err
+		}
+		taken = append(taken, r)
+	}
+	return nil
+}
+
+// apply returns base and gRPC dial options that fail requests over the
+// limits. Without any limit, base comes back as is.
+func (ls limits) apply(base http.RoundTripper) (http.RoundTripper, []grpc.DialOption) {
+	if !slices.ContainsFunc(ls, func(l limit) bool { return l.limiter != nil }) {
+		return base, nil
+	}
+	exhausted := func() error {
+		if err := ls.allow(time.Now()); err != nil {
+			return status.Error(codes.ResourceExhausted, err.Error())
+		}
+		return nil
+	}
+	return &limitedTransport{base: base, limits: ls}, []grpc.DialOption{
+		grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			if err := exhausted(); err != nil {
+				return err
+			}
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}),
+		grpc.WithChainStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			if err := exhausted(); err != nil {
+				return nil, err
+			}
+			return streamer(ctx, desc, cc, method, opts...)
+		}),
+	}
+}
+
+// limitedTransport fails requests over its limits.
+type limitedTransport struct {
+	base   http.RoundTripper
+	limits limits
+}
+
+func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := t.limits.allow(time.Now()); err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
+	return t.base.RoundTrip(req)
 }
 
 // webhookBaseURL returns the URL webhooks are created under.
@@ -272,7 +424,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// reaches, such as through a tunnel or from a container, so the Host,
 	// origin and session checks don't apply. The webhook's random ID and
 	// token protect it.
-	if strings.HasPrefix(path.Clean(r.URL.Path), "/hooks/") {
+	if s.webhooks() && strings.HasPrefix(path.Clean(r.URL.Path), "/hooks/") {
 		h.Set("Cache-Control", "no-store")
 		s.mux.ServeHTTP(w, r)
 		return
@@ -291,19 +443,75 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "Cross-origin requests aren't allowed.")
 			return
 		}
-		if !s.authenticated(r) {
-			writeError(w, http.StatusUnauthorized, "No valid session. Open the URL the inspector printed when it started.")
+		sess, ok := s.apiSession(w, r)
+		if !ok {
 			return
 		}
-	} else if token := r.URL.Query().Get("token"); token != "" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		if sess.limiter != nil && !sess.limiter.Allow() {
+			writeError(w, http.StatusTooManyRequests, "Too many requests. Wait a moment and try again.")
+			return
+		}
+		if s.opts.Hosted {
+			r.Body = http.MaxBytesReader(w, r.Body, hostedRequestSize)
+		}
+		sess.begin()
+		defer sess.end()
+		r = r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess))
+	} else if token := r.URL.Query().Get("token"); token != "" && !s.opts.Hosted && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		s.startSession(w, r, token)
 		return
 	}
 	s.mux.ServeHTTP(w, r)
 }
 
+// apiSession returns the session of an API request, or writes why it has
+// none. A hosted inspector starts a session for a browser without one, and
+// replaces a session that ended with a new one: the answer is then 401 with
+// the code "sessionRenewed", so the UI knows its connections are gone.
+func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) (*session, bool) {
+	if !s.opts.Hosted {
+		if !s.authenticated(r) {
+			writeError(w, http.StatusUnauthorized, "No valid session. Open the URL the inspector printed when it started.")
+			return nil, false
+		}
+		return s.local, true
+	}
+	var stale string
+	if c, err := r.Cookie(hostedCookie); err == nil {
+		if sess := s.sessions.get(c.Value); sess != nil {
+			return sess, true
+		}
+		stale = c.Value
+	}
+	sess, err := s.sessions.renew(stale, s.clientOf(r), func(q *clientQuota) *session { return s.newSession(randomString(32), q) })
+	switch {
+	case errors.Is(err, errFull):
+		writeError(w, http.StatusServiceUnavailable, capitalize(err.Error())+".")
+		return nil, false
+	case err != nil:
+		writeError(w, http.StatusTooManyRequests, capitalize(err.Error())+".")
+		return nil, false
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     hostedCookie,
+		Value:    sess.id,
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	if stale != "" {
+		writeErrorCode(w, http.StatusUnauthorized, "sessionRenewed",
+			"Your session ended, so the inspector started a new one. Its connections and the credentials you entered are gone.")
+		return nil, false
+	}
+	return sess, true
+}
+
 // sameOrigin rejects requests a browser sends on behalf of another site. The
 // session cookie is SameSite=Strict, so this is a second line of defense.
+// The inspector may be reached through an https front end, such as a tunnel
+// or a hosting platform.
 func sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
@@ -311,7 +519,7 @@ func sameOrigin(r *http.Request) bool {
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
-		return strings.EqualFold(origin, "http://"+r.Host)
+		return strings.EqualFold(origin, "http://"+r.Host) || strings.EqualFold(origin, "https://"+r.Host)
 	}
 	return true
 }
