@@ -50,9 +50,7 @@ func (s *Server) unary(w http.ResponseWriter, r *http.Request, uc unaryCall) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	release := conn.use()
-	defer release()
-	callCtx, stop := s.callContext(r)
+	callCtx, stop := s.callContext(r, conn)
 	defer stop()
 	ctx, cancel := context.WithTimeout(callCtx, sendTimeout)
 	defer cancel()
@@ -93,11 +91,7 @@ func queryInt(w http.ResponseWriter, r *http.Request, name string) (*int, bool) 
 	return &n, true
 }
 
-func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request, conn *connection) {
 	id, verb := taskPath(r, "subscribe")
 	if verb == "subscribe" {
 		req := &a2a.SubscribeToTaskRequest{ID: a2a.TaskID(id)}
@@ -130,11 +124,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, conn *connection) {
 	id, verb := taskPath(r, "cancel")
 	if verb != "cancel" {
 		writeError(w, http.StatusNotFound, "Unknown task operation; use :cancel.")
@@ -162,18 +152,16 @@ func parseTaskState(v string) (a2a.TaskState, bool) {
 	return "", false
 }
 
-func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request, conn *connection) {
 	q := r.URL.Query()
 	req := &a2a.ListTasksRequest{ContextID: q.Get("contextId"), PageToken: q.Get("pageToken")}
 	if v := q.Get("status"); v != "" {
-		if req.Status, ok = parseTaskState(v); !ok {
+		state, ok := parseTaskState(v)
+		if !ok {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("Unknown task state %q.", v))
 			return
 		}
+		req.Status = state
 	}
 	pageSize, ok := queryInt(w, r, "pageSize")
 	if !ok {
@@ -208,11 +196,7 @@ type pushConfigRequest struct {
 	} `json:"external,omitempty"`
 }
 
-func (s *Server) handleCreatePushConfig(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleCreatePushConfig(w http.ResponseWriter, r *http.Request, conn *connection) {
 	var body pushConfigRequest
 	if !decodeRequest(w, r, &body) {
 		return
@@ -251,11 +235,7 @@ func (s *Server) handleCreatePushConfig(w http.ResponseWriter, r *http.Request) 
 		}})
 }
 
-func (s *Server) handleListPushConfigs(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleListPushConfigs(w http.ResponseWriter, r *http.Request, conn *connection) {
 	req := &a2a.ListTaskPushConfigRequest{TaskID: a2a.TaskID(r.PathValue("task"))}
 	s.unary(w, r, unaryCall{conn: conn, op: validate.ListTaskPushNotificationConfigs, kind: validate.ListTaskPushNotificationConfigsResponse,
 		do: func(ctx context.Context) (any, error) {
@@ -267,11 +247,7 @@ func (s *Server) handleListPushConfigs(w http.ResponseWriter, r *http.Request) {
 		}})
 }
 
-func (s *Server) handleGetPushConfig(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleGetPushConfig(w http.ResponseWriter, r *http.Request, conn *connection) {
 	req := &a2a.GetTaskPushConfigRequest{TaskID: a2a.TaskID(r.PathValue("task")), ID: r.PathValue("config")}
 	s.unary(w, r, unaryCall{conn: conn, op: validate.GetTaskPushNotificationConfig, kind: validate.TaskPushNotificationConfig,
 		do: func(ctx context.Context) (any, error) {
@@ -283,11 +259,7 @@ func (s *Server) handleGetPushConfig(w http.ResponseWriter, r *http.Request) {
 		}})
 }
 
-func (s *Server) handleDeletePushConfig(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleDeletePushConfig(w http.ResponseWriter, r *http.Request, conn *connection) {
 	req := &a2a.DeleteTaskPushConfigRequest{TaskID: a2a.TaskID(r.PathValue("task")), ID: r.PathValue("config")}
 	s.unary(w, r, unaryCall{conn: conn, op: validate.DeleteTaskPushNotificationConfig, kind: empty,
 		do: func(ctx context.Context) (any, error) {
@@ -299,11 +271,7 @@ func (s *Server) handleDeletePushConfig(w http.ResponseWriter, r *http.Request) 
 		}})
 }
 
-func (s *Server) handleExtendedCard(w http.ResponseWriter, r *http.Request) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleExtendedCard(w http.ResponseWriter, r *http.Request, conn *connection) {
 	s.unary(w, r, unaryCall{conn: conn, op: validate.GetExtendedAgentCard, kind: extendedCard,
 		do: func(ctx context.Context) (any, error) {
 			card, err := conn.client.GetExtendedAgentCard(ctx, &a2a.GetExtendedAgentCardRequest{})

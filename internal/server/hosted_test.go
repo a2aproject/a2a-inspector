@@ -39,6 +39,24 @@ func newHosted(t *testing.T, limits Limits) *Server {
 	return s
 }
 
+// get returns the session with the ID, or nil, without holding it.
+func (ss *sessions) get(id string) *session {
+	sess, _ := ss.pool.peek(id)
+	return sess
+}
+
+// hold holds the object with the ID until the test ends, as a request in
+// progress does.
+func hold[T pooled](t *testing.T, p *pool[T], id string) T {
+	t.Helper()
+	v, release, ok := p.acquire(id)
+	if !ok {
+		t.Fatalf("nothing to hold under %q", id)
+	}
+	t.Cleanup(release)
+	return v
+}
+
 // browser makes requests to a hosted inspector with its own cookie, as one
 // browser would. headers go with every request, as a proxy in front of the
 // inspector adds them.
@@ -162,9 +180,7 @@ func TestHostedSessions(t *testing.T) {
 		b := &browser{s: s}
 		b.do(request{target: "/api/config"})
 		old := b.cookie
-		s.sessions.mu.Lock()
-		s.sessions.endLocked(s.sessions.items[old], "test")
-		s.sessions.mu.Unlock()
+		s.sessions.pool.remove(old)
 
 		w := b.do(request{target: "/api/config"})
 		if w.Code != http.StatusUnauthorized || errorCode(t, w) != "sessionRenewed" || b.cookie == old {
@@ -194,10 +210,10 @@ func TestHostedSessionExpiry(t *testing.T) {
 	for _, b := range []*browser{idle, busy, old} {
 		b.do(request{target: "/api/config"})
 	}
-	busySession := s.sessions.get(busy.cookie)
-	busySession.begin()
-	defer busySession.end()
-	s.sessions.get(old.cookie).created = time.Now().Add(-2 * time.Hour)
+	busySession := hold(t, s.sessions.pool, busy.cookie)
+	// A request in progress doesn't keep a session past its maximum age.
+	oldSession := hold(t, s.sessions.pool, old.cookie)
+	oldSession.created = time.Now().Add(-2 * time.Hour)
 
 	s.sessions.sweep(time.Now().Add(2 * time.Minute))
 	if s.sessions.get(idle.cookie) != nil {
@@ -213,6 +229,11 @@ func TestHostedSessionExpiry(t *testing.T) {
 	case <-busySession.ctx.Done():
 		t.Error("the busy session's context ended")
 	default:
+	}
+	select {
+	case <-oldSession.ctx.Done():
+	default:
+		t.Error("the old session's requests weren't stopped")
 	}
 }
 
@@ -233,9 +254,7 @@ func TestHostedSessionCap(t *testing.T) {
 
 	// With every session busy, there's no room.
 	for _, b := range []*browser{second, third} {
-		sess := s.sessions.get(b.cookie)
-		sess.begin()
-		t.Cleanup(sess.end)
+		hold(t, s.sessions.pool, b.cookie)
 	}
 	if w := (&browser{s: s}).do(request{target: "/api/config"}); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("fourth browser = %d %s, want 503", w.Code, w.Body)
@@ -391,9 +410,7 @@ func TestHostedClientLimits(t *testing.T) {
 
 		// With every session of the client busy, it has no room; other clients do.
 		for _, b := range []*browser{second, third} {
-			sess := s.sessions.get(b.cookie)
-			sess.begin()
-			t.Cleanup(sess.end)
+			hold(t, s.sessions.pool, b.cookie)
 		}
 		if w := from(s, "203.0.113.7").do(config); w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "from your address or account") {
 			t.Errorf("session over the client's limit = %d %s", w.Code, w.Body)
@@ -497,8 +514,8 @@ func TestHostedConnectionCap(t *testing.T) {
 
 	// Connections with calls in progress stay; with all of them busy, there's no room.
 	sess := s.sessions.get(b.cookie)
-	for _, c := range sess.conns.all() {
-		t.Cleanup(c.use())
+	for _, c := range sess.conns.values() {
+		hold(t, sess.conns.pool, c.view.ID)
 	}
 	w := b.do(request{method: http.MethodPost, target: "/api/connections", body: `{"interface":{"url":"` + agent.URL + `","protocolBinding":"JSONRPC","protocolVersion":"1.0"}}`})
 	if w.Code != http.StatusTooManyRequests {
@@ -642,6 +659,52 @@ func TestStreamDurationLimit(t *testing.T) {
 	if len(events) != 1 || events[0].Call.Error == nil || !strings.Contains(events[0].Call.Error.Message, "ended the stream after 200ms") {
 		t.Errorf("events = %+v", events)
 	}
+}
+
+func TestDeleteConnectionEndsItsCalls(t *testing.T) {
+	started, ended := make(chan struct{}), make(chan struct{})
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(started)
+		<-r.Context().Done()
+		close(ended)
+	}))
+	// Cleanups run last first: closing the inspector ends the call, so the
+	// agent can close.
+	t.Cleanup(agent.Close)
+	s := newServer(t, Options{})
+	t.Cleanup(s.Close)
+	conn := s.connect(t, `{"interface":{"url":"`+agent.URL+`","protocolBinding":"JSONRPC","protocolVersion":"1.0"}}`)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- s.do(request{method: http.MethodPost, target: "/api/connections/" + conn.ID + "/messages:stream", body: `{"compose":{"text":"hi"}}`, cookie: true})
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream didn't reach the agent")
+	}
+	if w := s.do(request{method: http.MethodDelete, target: "/api/connections/" + conn.ID, cookie: true}); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s", w.Code, w.Body)
+	}
+	for name, ch := range map[string]<-chan struct{}{"the call to the agent": ended, "the stream": recorderDone(done)} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s didn't end when its connection was removed", name)
+		}
+	}
+}
+
+func recorderDone(done <-chan *httptest.ResponseRecorder) <-chan struct{} {
+	out := make(chan struct{})
+	go func() {
+		<-done
+		close(out)
+	}()
+	return out
 }
 
 func TestOriginOverHTTPS(t *testing.T) {

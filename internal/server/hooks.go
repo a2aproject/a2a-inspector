@@ -288,12 +288,15 @@ func (s *Server) handleHook(w http.ResponseWriter, r *http.Request) {
 	n.Payload, n.Error = s.notificationPayload(body, wh.version)
 	if n.Payload != nil {
 		n.TaskID = taskRefOf(n.Payload.Raw).ID
-		if conn, ok := sess.conns.get(wh.connectionID); ok && n.TokenValid {
-			before := conversationOf(conn)
-			conn.observe(n.Payload.Raw, false)
-			if after := conversationOf(conn); !conversationEqual(before, after) {
-				n.Conversation = &after
+		if conn, release, ok := sess.conns.acquire(wh.connectionID); ok {
+			if n.TokenValid {
+				before := conversationOf(conn)
+				conn.observe(n.Payload.Raw, false)
+				if after := conversationOf(conn); !conversationEqual(before, after) {
+					n.Conversation = &after
+				}
 			}
+			release()
 		}
 	}
 	n.TaskID = cmp.Or(n.TaskID, wh.taskID)
@@ -389,7 +392,7 @@ func (s *Server) handleHooks(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	conversations := map[string]conversation{}
-	for _, c := range sess.conns.all() {
+	for _, c := range sess.conns.values() {
 		if connID == "" || c.view.ID == connID {
 			conversations[c.view.ID] = conversationOf(c)
 		}

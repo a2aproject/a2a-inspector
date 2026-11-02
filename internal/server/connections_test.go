@@ -127,7 +127,7 @@ func TestSecrets(t *testing.T) {
 
 func mustConnection(t *testing.T, s *Server, id string) *connection {
 	t.Helper()
-	c, ok := s.local.conns.get(id)
+	c, ok := s.local.conns.peek(id)
 	if !ok {
 		t.Fatalf("no connection %s", id)
 	}

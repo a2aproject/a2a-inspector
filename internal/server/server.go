@@ -198,18 +198,18 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("POST /api/card:resolve", s.handleCardResolve)
 	s.mux.HandleFunc("POST /api/card:validate", s.handleCardValidate)
 	s.mux.HandleFunc("POST /api/connections", s.handleCreateConnection)
-	s.mux.HandleFunc("GET /api/connections/{id}", s.handleGetConnection)
+	s.mux.HandleFunc("GET /api/connections/{id}", s.withConnection(s.handleGetConnection))
 	s.mux.HandleFunc("DELETE /api/connections/{id}", s.handleDeleteConnection)
-	s.mux.HandleFunc("POST /api/connections/{id}/messages:send", s.handleSend)
-	s.mux.HandleFunc("POST /api/connections/{id}/messages:stream", s.handleStream)
-	s.mux.HandleFunc("GET /api/connections/{id}/tasks", s.handleListTasks)
-	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}", s.handleGetTask)
-	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}", s.handleTaskAction)
-	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.handleCreatePushConfig)
-	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.handleListPushConfigs)
-	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.handleGetPushConfig)
-	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.handleDeletePushConfig)
-	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.handleExtendedCard)
+	s.mux.HandleFunc("POST /api/connections/{id}/messages:send", s.withConnection(s.handleSend))
+	s.mux.HandleFunc("POST /api/connections/{id}/messages:stream", s.withConnection(s.handleStream))
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks", s.withConnection(s.handleListTasks))
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}", s.withConnection(s.handleGetTask))
+	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}", s.withConnection(s.handleTaskAction))
+	s.mux.HandleFunc("POST /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.withConnection(s.handleCreatePushConfig))
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs", s.withConnection(s.handleListPushConfigs))
+	s.mux.HandleFunc("GET /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.withConnection(s.handleGetPushConfig))
+	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.withConnection(s.handleDeletePushConfig))
+	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.withConnection(s.handleExtendedCard))
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
 	if s.webhooks() {
 		s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
@@ -228,7 +228,7 @@ func New(opts Options) (*Server, error) {
 func (s *Server) Close() {
 	s.cancel()
 	if s.local != nil {
-		s.local.close()
+		s.local.destroy()
 	}
 	if s.sessions != nil {
 		s.sessions.closeAll()
@@ -260,11 +260,12 @@ func (s *Server) sweepSessions() {
 	}
 }
 
-// callContext is the context of a call to an agent: it ends with the
-// request, or when the session ends or the server closes.
-func (s *Server) callContext(r *http.Request) (context.Context, context.CancelFunc) {
+// callContext is the context of a call on a connection: it ends with the
+// request, or when the connection is removed, its session ends or the
+// server closes.
+func (s *Server) callContext(r *http.Request, conn *connection) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(r.Context())
-	stop := context.AfterFunc(sessionOf(r).ctx, cancel)
+	stop := context.AfterFunc(conn.ctx, cancel)
 	return ctx, func() {
 		stop()
 		cancel()
@@ -443,10 +444,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "Cross-origin requests aren't allowed.")
 			return
 		}
-		sess, ok := s.apiSession(w, r)
+		sess, release, ok := s.apiSession(w, r)
 		if !ok {
 			return
 		}
+		defer release()
 		if sess.limiter != nil && !sess.limiter.Allow() {
 			writeError(w, http.StatusTooManyRequests, "Too many requests. Wait a moment and try again.")
 			return
@@ -454,8 +456,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.opts.Hosted {
 			r.Body = http.MaxBytesReader(w, r.Body, hostedRequestSize)
 		}
-		sess.begin()
-		defer sess.end()
 		r = r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess))
 	} else if token := r.URL.Query().Get("token"); token != "" && !s.opts.Hosted && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		s.startSession(w, r, token)
@@ -464,33 +464,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// apiSession returns the session of an API request, or writes why it has
-// none. A hosted inspector starts a session for a browser without one, and
-// replaces a session that ended with a new one: the answer is then 401 with
-// the code "sessionRenewed", so the UI knows its connections are gone.
-func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) (*session, bool) {
+// apiSession returns the session of an API request, held until release is
+// called, or writes why it has none. A hosted inspector starts a session
+// for a browser without one, and replaces a session that ended with a new
+// one: the answer is then 401 with the code "sessionRenewed", so the UI
+// knows its connections are gone.
+func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) (sess *session, release func(), ok bool) {
 	if !s.opts.Hosted {
 		if !s.authenticated(r) {
 			writeError(w, http.StatusUnauthorized, "No valid session. Open the URL the inspector printed when it started.")
-			return nil, false
+			return nil, nil, false
 		}
-		return s.local, true
+		return s.local, func() {}, true
 	}
 	var stale string
 	if c, err := r.Cookie(hostedCookie); err == nil {
-		if sess := s.sessions.get(c.Value); sess != nil {
-			return sess, true
+		if sess, release, ok := s.sessions.acquire(c.Value); ok {
+			return sess, release, true
 		}
 		stale = c.Value
 	}
-	sess, err := s.sessions.renew(stale, s.clientOf(r), func(q *clientQuota) *session { return s.newSession(randomString(32), q) })
+	sess, release, err := s.sessions.renew(stale, s.clientOf(r), func(q *clientQuota) *session { return s.newSession(randomString(32), q) })
 	switch {
+	case errors.Is(err, errPoolClosed):
+		writeError(w, http.StatusServiceUnavailable, "The inspector is shutting down.")
+		return nil, nil, false
 	case errors.Is(err, errFull):
 		writeError(w, http.StatusServiceUnavailable, capitalize(err.Error())+".")
-		return nil, false
+		return nil, nil, false
 	case err != nil:
 		writeError(w, http.StatusTooManyRequests, capitalize(err.Error())+".")
-		return nil, false
+		return nil, nil, false
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     hostedCookie,
@@ -501,11 +505,12 @@ func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) (*session, b
 		SameSite: http.SameSiteStrictMode,
 	})
 	if stale != "" {
+		release()
 		writeErrorCode(w, http.StatusUnauthorized, "sessionRenewed",
 			"Your session ended, so the inspector started a new one. Its connections and the credentials you entered are gone.")
-		return nil, false
+		return nil, nil, false
 	}
-	return sess, true
+	return sess, release, true
 }
 
 // sameOrigin rejects requests a browser sends on behalf of another site. The

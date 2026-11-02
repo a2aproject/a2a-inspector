@@ -135,12 +135,8 @@ func (s *Server) buildSend(conn *connection, req sendRequest) (*a2a.SendMessageR
 }
 
 // prepareSend decodes and builds a send request, or writes an error response.
-func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall, bool) {
+func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request, conn *connection) (*sendCall, bool) {
 	sess := sessionOf(r)
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return nil, false
-	}
 	var req sendRequest
 	if !decodeRequest(w, r, &req) {
 		return nil, false
@@ -181,15 +177,13 @@ func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall,
 	return sc, true
 }
 
-func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, conn *connection) {
 	sess := sessionOf(r)
-	sc, ok := s.prepareSend(w, r)
+	sc, ok := s.prepareSend(w, r, conn)
 	if !ok {
 		return
 	}
-	release := sc.conn.use()
-	defer release()
-	callCtx, stop := s.callContext(r)
+	callCtx, stop := s.callContext(r, conn)
 	defer stop()
 	ctx, cancel := context.WithTimeout(callCtx, sendTimeout)
 	defer cancel()
@@ -202,8 +196,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	sc, ok := s.prepareSend(w, r)
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, conn *connection) {
+	sc, ok := s.prepareSend(w, r, conn)
 	if !ok {
 		return
 	}
@@ -254,8 +248,6 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 		return
 	}
 	defer sess.closeStream()
-	release := sc.conn.use()
-	defer release()
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("X-Accel-Buffering", "no")
@@ -265,7 +257,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	conn, tc := sc.conn, sc.tc
 	binding, version := conn.binding()
 	opFindings := s.operationFindings(conn, sc.op)
-	ctx, stop := s.callContext(r)
+	ctx, stop := s.callContext(r, conn)
 	defer stop()
 	if d := s.opts.Limits.StreamDuration; d > 0 {
 		var cancel context.CancelFunc

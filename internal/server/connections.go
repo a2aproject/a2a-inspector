@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -26,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -130,13 +131,21 @@ type connection struct {
 	client  *a2aclient.Client
 	// params resolves the service parameters and the secret values among them.
 	params func() (a2aclient.ServiceParams, []string, error)
+	// ctx ends when the connection is removed or its session ends, and ends
+	// the calls on it.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	contextID string
 	openTask  *taskState
-	lastUsed  time.Time
-	// calls counts the calls in progress, streams included.
-	calls int
+}
+
+func (c *connection) stop() { c.cancel() }
+
+func (c *connection) destroy() {
+	c.cancel()
+	_ = c.client.Destroy()
 }
 
 func (c *connection) response() connectionResponse {
@@ -206,94 +215,38 @@ func (c *connection) call() (*traffic.Call, error) {
 	return &traffic.Call{ConnectionID: c.view.ID, Secrets: secrets, Headers: slices.Collect(maps.Keys(params))}, nil
 }
 
-// use counts a call in progress on the connection; the returned func ends it.
-func (c *connection) use() func() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.calls++
-	return func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.calls--
-		c.lastUsed = time.Now()
-	}
-}
-
-// usage reports whether the connection has a call in progress, and when it was last used.
-func (c *connection) usage() (bool, time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.calls > 0, c.lastUsed
-}
-
+// connections are the connections of a session. Handlers acquire a
+// connection for as long as they use it.
 type connections struct {
-	mu   sync.Mutex
-	next int
+	*pool[*connection]
 	// max is how many connections to keep; 0 means no limit.
-	max   int
-	items map[string]*connection
+	max  int
+	next atomic.Int64
 }
 
-var errTooManyConnections = errors.New("too many connections busy with calls in this session; stop a stream or remove an agent first")
+var (
+	errTooManyConnections = errors.New("too many connections busy with calls in this session; stop a stream or remove an agent first")
+	errSessionEnded       = errors.New("the session ended; try again")
+)
 
-// add keeps a connection and gives it an ID. At the limit, it drops the
-// connection used the longest ago that has no call in progress, and returns
-// it to be closed. It fails when every connection is busy.
-func (cs *connections) add(c *connection) (dropped *connection, err error) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if cs.max > 0 && len(cs.items) >= cs.max {
-		var oldest time.Time
-		for _, other := range cs.items {
-			if busy, used := other.usage(); !busy && (dropped == nil || used.Before(oldest)) {
-				dropped, oldest = other, used
-			}
-		}
-		if dropped == nil {
-			return nil, errTooManyConnections
-		}
-		delete(cs.items, dropped.view.ID)
+func newConnections(max int) *connections {
+	return &connections{pool: newPool[*connection](), max: max}
+}
+
+// add keeps a connection and gives it an ID. At the limit, it replaces the
+// connection used the longest ago that nobody uses. It fails when every
+// connection is in use, or the session ended.
+func (cs *connections) add(c *connection) error {
+	c.view.ID = "conn-" + strconv.FormatInt(cs.next.Add(1), 10)
+	release, _, err := cs.pool.add(c.view.ID, c, poolLimit[*connection]{max: cs.max, err: errTooManyConnections})
+	if errors.Is(err, errPoolClosed) {
+		return errSessionEnded
 	}
-	cs.next++
-	id := "conn-" + strconv.Itoa(cs.next)
-	c.view.ID = id
-	c.lastUsed = time.Now()
-	cs.items[id] = c
-	return dropped, nil
-}
-
-func (cs *connections) get(id string) (*connection, bool) {
-	cs.mu.Lock()
-	c, ok := cs.items[id]
-	cs.mu.Unlock()
-	if ok {
-		c.mu.Lock()
-		c.lastUsed = time.Now()
-		c.mu.Unlock()
+	if err != nil {
+		return err
 	}
-	return c, ok
-}
-
-func (cs *connections) all() []*connection {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	return slices.Collect(maps.Values(cs.items))
-}
-
-func (cs *connections) remove(id string) (*connection, bool) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	c, ok := cs.items[id]
-	delete(cs.items, id)
-	return c, ok
-}
-
-func (cs *connections) removeAll() []*connection {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	all := slices.Collect(maps.Values(cs.items))
-	clear(cs.items)
-	return all
+	release()
+	return nil
 }
 
 // paramSource is one resolved header: a fixed value, or a secret formatted
@@ -556,18 +509,19 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	conn.client = client
+	conn.ctx, conn.cancel = context.WithCancel(sess.ctx)
 	conn.contextID = req.ContextID
 	if req.OpenTask != nil && req.OpenTask.ID != "" {
 		conn.openTask = req.OpenTask
 	}
-	dropped, err := sess.conns.add(conn)
-	if err != nil {
-		_ = client.Destroy()
-		writeError(w, http.StatusTooManyRequests, capitalize(err.Error())+".")
+	if err := sess.conns.add(conn); err != nil {
+		conn.destroy()
+		status := http.StatusTooManyRequests
+		if errors.Is(err, errSessionEnded) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, capitalize(err.Error())+".")
 		return
-	}
-	if dropped != nil {
-		_ = dropped.client.Destroy()
 	}
 	if req.Replaces != "" {
 		sess.hooks.move(req.Replaces, conn.view.ID)
@@ -575,27 +529,32 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, conn.response())
 }
 
-func (s *Server) connection(w http.ResponseWriter, r *http.Request) (*connection, bool) {
-	c, ok := sessionOf(r).conns.get(r.PathValue("id"))
-	if !ok {
-		writeErrorCode(w, http.StatusNotFound, "unknownConnection", "Unknown connection. Connect to the agent again.")
+// withConnection runs h with the connection the request names, and holds
+// the connection until h returns, so it isn't replaced or destroyed while
+// h uses it.
+func (s *Server) withConnection(h func(http.ResponseWriter, *http.Request, *connection)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, release, ok := sessionOf(r).conns.acquire(r.PathValue("id"))
+		if !ok {
+			writeErrorCode(w, http.StatusNotFound, "unknownConnection", "Unknown connection. Connect to the agent again.")
+			return
+		}
+		defer release()
+		h(w, r, conn)
 	}
-	return c, ok
 }
 
-func (s *Server) handleGetConnection(w http.ResponseWriter, r *http.Request) {
-	if c, ok := s.connection(w, r); ok {
-		writeJSON(w, http.StatusOK, c.response())
-	}
+func (s *Server) handleGetConnection(w http.ResponseWriter, _ *http.Request, conn *connection) {
+	writeJSON(w, http.StatusOK, conn.response())
 }
 
+// handleDeleteConnection removes a connection. Its calls in progress end,
+// and its client is closed once they have.
 func (s *Server) handleDeleteConnection(w http.ResponseWriter, r *http.Request) {
-	c, ok := sessionOf(r).conns.remove(r.PathValue("id"))
-	if !ok {
+	if !sessionOf(r).conns.remove(r.PathValue("id")) {
 		writeError(w, http.StatusNotFound, "Unknown connection.")
 		return
 	}
-	_ = c.client.Destroy()
 	w.WriteHeader(http.StatusNoContent)
 }
 

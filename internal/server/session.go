@@ -107,15 +107,12 @@ type session struct {
 	// without limits per client.
 	quota *clientQuota
 	// ctx ends with the session, and ends its calls and streams.
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx     context.Context
+	cancel  context.CancelFunc
+	created time.Time
 
-	mu       sync.Mutex
-	created  time.Time
-	lastSeen time.Time
-	// requests counts the API requests in flight, streams included.
-	requests int
-	streams  int
+	mu      sync.Mutex
+	streams int
 }
 
 // newSession returns a session in the client's quota q, which is nil
@@ -131,7 +128,6 @@ func (s *Server) newSession(id string, q *clientQuota) *session {
 	egressLimits = append(egressLimits, limit{s.egress, errEgressRate})
 	transport, grpcOptions := egressLimits.apply(s.transport)
 	client := &http.Client{Transport: &traffic.Transport{Log: log, Base: transport}, CheckRedirect: checkRedirect}
-	now := time.Now()
 	sess := &session{
 		id:      id,
 		traffic: log,
@@ -142,38 +138,24 @@ func (s *Server) newSession(id string, q *clientQuota) *session {
 			Transports:      s.opts.Transports,
 			Egress:          s.opts.Egress,
 		},
-		secrets:  newSecretStore(!s.opts.Hosted),
-		conns:    &connections{items: map[string]*connection{}, max: s.opts.Limits.Connections},
-		hooks:    newHooks(),
-		limiter:  newLimiter(s.opts.Limits.RequestRate, 4),
-		quota:    q,
-		created:  now,
-		lastSeen: now,
+		secrets: newSecretStore(!s.opts.Hosted),
+		conns:   newConnections(s.opts.Limits.Connections),
+		hooks:   newHooks(),
+		limiter: newLimiter(s.opts.Limits.RequestRate, 4),
+		quota:   q,
+		created: time.Now(),
 	}
 	sess.ctx, sess.cancel = context.WithCancel(s.ctx)
 	return sess
 }
 
-// close ends the session's streams and closes its connections.
-func (sess *session) close() {
+// stop ends the session's calls and streams.
+func (sess *session) stop() { sess.cancel() }
+
+// destroy closes the session's connections.
+func (sess *session) destroy() {
 	sess.cancel()
-	for _, c := range sess.conns.removeAll() {
-		_ = c.client.Destroy()
-	}
-}
-
-func (sess *session) begin() {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	sess.requests++
-	sess.lastSeen = time.Now()
-}
-
-func (sess *session) end() {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	sess.requests--
-	sess.lastSeen = time.Now()
+	sess.conns.close()
 }
 
 // openStream counts a stream against the session's limit, or reports false
@@ -194,13 +176,6 @@ func (sess *session) closeStream() {
 	sess.streams--
 }
 
-// idle reports whether the session has no request in flight, and since when.
-func (sess *session) idle() (bool, time.Time) {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	return sess.requests == 0, sess.lastSeen
-}
-
 type sessionKey struct{}
 
 // sessionOf returns the session of an API request.
@@ -208,14 +183,17 @@ func sessionOf(r *http.Request) *session {
 	return r.Context().Value(sessionKey{}).(*session)
 }
 
-// sessions are the sessions of a hosted inspector.
+// sessions are the sessions of a hosted inspector. Requests acquire their
+// session for as long as they run.
 type sessions struct {
 	limits Limits
 	create *rate.Limiter
 	logf   func(format string, args ...any)
+	pool   *pool[*session]
 
-	mu    sync.Mutex
-	items map[string]*session
+	// mu serializes starting and sweeping sessions, and guards renewed and
+	// clients.
+	mu sync.Mutex
 	// renewed maps the IDs of sessions that ended to the sessions that
 	// replaced them, for renewalGrace.
 	renewed map[string]renewal
@@ -231,7 +209,6 @@ type renewal struct {
 
 // clientQuota is the share of the inspector a client can use.
 type clientQuota struct {
-	sessions int
 	// start bounds the client's new sessions, and egress its requests to
 	// agents; nil means no limit.
 	start  *rate.Limiter
@@ -250,69 +227,65 @@ func newSessions(limits Limits, logf func(string, ...any)) *sessions {
 		limits:  limits,
 		create:  rate.NewLimiter(sessionRate, sessionBurst),
 		logf:    logf,
-		items:   map[string]*session{},
+		pool:    newPool[*session](),
 		renewed: map[string]renewal{},
 		clients: map[string]*clientQuota{},
 	}
 }
 
-func (ss *sessions) get(id string) *session {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	return ss.items[id]
+// acquire returns the session with the ID, held until release is called.
+func (ss *sessions) acquire(id string) (sess *session, release func(), ok bool) {
+	return ss.pool.acquire(id)
 }
 
 // renew returns the session that replaced the one with the given ID, if
-// it was replaced moments ago, or starts a new session for it.
-func (ss *sessions) renew(old, client string, start func(*clientQuota) *session) (*session, error) {
+// it was replaced moments ago, or starts a new session for it. The session
+// is held until release is called.
+func (ss *sessions) renew(old, client string, start func(*clientQuota) *session) (sess *session, release func(), err error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	if r, ok := ss.renewed[old]; ok && time.Since(r.at) < renewalGrace {
-		if sess, ok := ss.items[r.id]; ok {
-			return sess, nil
+		if sess, release, ok := ss.pool.acquire(r.id); ok {
+			return sess, release, nil
 		}
 	}
-	sess, err := ss.startLocked(client, start)
+	sess, release, err = ss.startLocked(client, start)
 	if err == nil && old != "" {
 		ss.renewed[old] = renewal{id: sess.id, at: time.Now()}
 	}
-	return sess, err
+	return sess, release, err
 }
 
-// startLocked starts a session for the client, making room for it if the
-// client or the inspector is at its limit. Callers hold ss.mu.
-func (ss *sessions) startLocked(client string, start func(*clientQuota) *session) (*session, error) {
+// startLocked starts a session for the client, replacing the client's or
+// the inspector's session idle the longest at their limits. Callers hold
+// ss.mu.
+func (ss *sessions) startLocked(client string, start func(*clientQuota) *session) (*session, func(), error) {
 	now := time.Now()
 	q := ss.quotaLocked(client)
 	creates := limits{{ss.create, errTooManySessions}}
+	var caps []poolLimit[*session]
 	if q != nil {
 		creates = limits{{q.start, errClientSessionRate}, {ss.create, errTooManySessions}}
+		caps = append(caps, poolLimit[*session]{max: ss.limits.ClientSessions, match: func(sess *session) bool { return sess.quota == q }, err: errClientFull})
 	}
+	caps = append(caps, poolLimit[*session]{max: ss.limits.MaxSessions, err: errFull})
 	if err := creates.allow(now); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ss.sweepLocked(now)
-	if q != nil && ss.limits.ClientSessions > 0 && q.sessions >= ss.limits.ClientSessions {
-		oldest := ss.idleLongestLocked(func(sess *session) bool { return sess.quota == q })
-		if oldest == nil {
-			return nil, errClientFull
-		}
-		ss.endLocked(oldest, "replaced by a new session of the same client")
-	}
-	if ss.limits.MaxSessions > 0 && len(ss.items) >= ss.limits.MaxSessions {
-		oldest := ss.idleLongestLocked(func(*session) bool { return true })
-		if oldest == nil {
-			return nil, errFull
-		}
-		ss.endLocked(oldest, "replaced by a new session")
-	}
+	active := ss.pool.len()
 	sess := start(q)
-	if q != nil {
-		q.sessions++
+	release, replaced, err := ss.pool.add(sess.id, sess, caps...)
+	if err != nil {
+		sess.destroy()
+		return nil, nil, err
 	}
-	ss.items[sess.id] = sess
-	ss.logf("session started (%d active)", len(ss.items))
-	return sess, nil
+	for range replaced {
+		active--
+		ss.logf("session ended, replaced by a new session (%d active)", active)
+	}
+	ss.logf("session started (%d active)", active+1)
+	return sess, release, nil
 }
 
 // quotaLocked returns the client's quota, or nil without limits per client.
@@ -332,19 +305,6 @@ func (ss *sessions) quotaLocked(client string) *clientQuota {
 	return q
 }
 
-// idleLongestLocked returns the matching session idle the longest, or nil
-// when every one has a request in flight. Callers hold ss.mu.
-func (ss *sessions) idleLongestLocked(match func(*session) bool) *session {
-	var oldest *session
-	var oldestSeen time.Time
-	for _, sess := range ss.items {
-		if idle, seen := sess.idle(); idle && match(sess) && (oldest == nil || seen.Before(oldestSeen)) {
-			oldest, oldestSeen = sess, seen
-		}
-	}
-	return oldest
-}
-
 // sweep ends the sessions that are idle for too long or too old.
 func (ss *sessions) sweep(now time.Time) {
 	ss.mu.Lock()
@@ -353,14 +313,21 @@ func (ss *sessions) sweep(now time.Time) {
 }
 
 func (ss *sessions) sweepLocked(now time.Time) {
-	for _, sess := range ss.items {
-		idle, seen := sess.idle()
+	// A session ends at its maximum age even with requests in progress; the
+	// pool stops them.
+	ended := ss.pool.removeIf(func(sess *session, held bool, lastUse time.Time) string {
 		switch {
 		case ss.limits.MaxAge > 0 && now.Sub(sess.created) > ss.limits.MaxAge:
-			ss.endLocked(sess, "reached its maximum age")
-		case ss.limits.IdleTimeout > 0 && idle && now.Sub(seen) > ss.limits.IdleTimeout:
-			ss.endLocked(sess, "idle")
+			return "reached its maximum age"
+		case ss.limits.IdleTimeout > 0 && !held && now.Sub(lastUse) > ss.limits.IdleTimeout:
+			return "idle"
 		}
+		return ""
+	})
+	active := ss.pool.len() + len(ended)
+	for _, why := range ended {
+		active--
+		ss.logf("session ended, %s (%d active)", why, active)
 	}
 	for old, r := range ss.renewed {
 		if now.Sub(r.at) >= renewalGrace {
@@ -369,8 +336,12 @@ func (ss *sessions) sweepLocked(now time.Time) {
 	}
 	// A quota without sessions and with full limiters is the same as a new
 	// one.
+	inUse := map[*clientQuota]bool{}
+	for _, sess := range ss.pool.values() {
+		inUse[sess.quota] = true
+	}
 	for client, q := range ss.clients {
-		if q.sessions == 0 && refilled(q.start, now) && refilled(q.egress, now) {
+		if !inUse[q] && refilled(q.start, now) && refilled(q.egress, now) {
 			delete(ss.clients, client)
 		}
 	}
@@ -378,15 +349,6 @@ func (ss *sessions) sweepLocked(now time.Time) {
 
 func refilled(l *rate.Limiter, now time.Time) bool {
 	return l == nil || l.TokensAt(now) >= float64(l.Burst())
-}
-
-func (ss *sessions) endLocked(sess *session, why string) {
-	delete(ss.items, sess.id)
-	if sess.quota != nil {
-		sess.quota.sessions--
-	}
-	sess.close()
-	ss.logf("session ended, %s (%d active)", why, len(ss.items))
 }
 
 // clientOf returns the client a request comes from, for limits per client:
@@ -424,11 +386,5 @@ func (s *Server) clientOf(r *http.Request) string {
 	return addr.String()
 }
 
-func (ss *sessions) closeAll() {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	for _, sess := range ss.items {
-		delete(ss.items, sess.id)
-		sess.close()
-	}
-}
+// closeAll ends every session, and makes starting new ones fail.
+func (ss *sessions) closeAll() { ss.pool.close() }
