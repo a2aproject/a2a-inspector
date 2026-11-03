@@ -1166,6 +1166,18 @@ input[type='file']:hover::file-selector-button {
   padding-left: 10px;
   margin-top: 8px;
 }
+/* The chunks of a streamed artifact, each read like an event of its own. */
+.chunks {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.chunks > li + li {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
 .composer {
   flex: none;
   max-height: 60%;

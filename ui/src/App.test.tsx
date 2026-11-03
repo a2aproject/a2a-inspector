@@ -328,6 +328,36 @@ describe('App', () => {
       expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
     });
 
+    it('appends streamed artifact chunks to the artifact they extend', async () => {
+      const chunk = (text: string, extra: Record<string, unknown>) =>
+        result({ artifactUpdate: { taskId: 't-1', contextId: 'ctx-1', artifact: { artifactId: 'a', name: 'answer', parts: [{ text }] }, ...extra } });
+      await openAgent({
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/messages:stream': () =>
+          sse(
+            [
+              { data: chunk('Hello', {}) },
+              { data: chunk(', wor', { append: true }) },
+              { data: result({ statusUpdate: { taskId: 't-1', contextId: 'ctx-1', status: { state: 'TASK_STATE_WORKING' } } }) },
+              { data: chunk('ld', { append: true, lastChunk: true }) },
+            ],
+            true,
+          ),
+      });
+      const user = userEvent.setup();
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'go{Control>}{Enter}{/Control}');
+
+      const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+      expect(await transcript.findByText('Hello, world')).toBeInTheDocument();
+      // The user's message, the assembled artifact and the status update.
+      expect(screen.getByRole('list', { name: 'Messages' }).children).toHaveLength(3);
+      expect(transcript.getByText('3 chunks')).toBeInTheDocument();
+      // Every chunk stays inspectable, with its own validation and raw JSON.
+      await user.click(transcript.getByText('Chunks'));
+      expect(transcript.getByText(', wor')).toBeVisible();
+      expect(transcript.getAllByText('Raw JSON')).toHaveLength(4);
+    });
+
     it('shows agent errors and links to their traffic', async () => {
       const entry: TrafficEntry = {
         id: 'tr-2',

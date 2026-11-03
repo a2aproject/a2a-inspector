@@ -1,10 +1,11 @@
-import { type ChangeEvent, type KeyboardEvent, type SubmitEvent, useEffect, useId, useRef, useState } from 'react';
+import { type ChangeEvent, type KeyboardEvent, type SubmitEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type AgentEntry, type ChatItem, selectedInterfaceOf } from '../agents';
 import type { Attachment, SendRequest } from '../api/types';
 import { summarizeCard } from '../card';
+import { chatLines } from '../chunks';
 import { rawTemplate } from '../settings';
 import { shortId } from '../tasks';
-import { AgentEvent, type FormHandler } from './AgentEvent';
+import { AgentEvent, type FormHandler, StreamedArtifactEvent } from './AgentEvent';
 import { JsonBlock } from './JsonBlock';
 
 /** What the chat shows for the user's own message. */
@@ -40,6 +41,7 @@ export function ChatPanel({ agent, webhooks, webhookWarning, onSend, onStop, onN
   // Follows new messages while the transcript is scrolled to the bottom, but not when the user
   // scrolled up to read.
   const following = useRef(true);
+  const lines = useMemo(() => chatLines(agent.chat), [agent.chat]);
   useEffect(() => {
     const el = transcript.current;
     if (el && following.current) {
@@ -92,9 +94,13 @@ export function ChatPanel({ agent, webhooks, webhookWarning, onSend, onStop, onN
           following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {agent.chat.map((item) => (
-          <li key={item.id}>
-            <ChatLine item={item} forms={forms(item.id)} onShowTraffic={onShowTraffic} />
+        {lines.map((line) => (
+          <li key={line.id}>
+            {line.type === 'artifact' ? (
+              <StreamedArtifactEvent artifact={line} forms={forms(line.id)} onShowTraffic={onShowTraffic} />
+            ) : (
+              <ChatLine item={line} forms={forms(line.id)} onShowTraffic={onShowTraffic} />
+            )}
           </li>
         ))}
         {agent.busy && (
