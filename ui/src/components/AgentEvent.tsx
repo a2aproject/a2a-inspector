@@ -4,6 +4,7 @@ import type { AgentPayload, AgentResult } from '../api/types';
 import { readForm } from '../a2a/form';
 import { type EventView, type PartView, viewPayload } from '../a2a/view';
 import { safeHref } from '../card';
+import type { StreamedArtifact } from '../chunks';
 import { shortId } from '../tasks';
 import { FindingList } from './FindingList';
 import { FormPart } from './FormPart';
@@ -180,6 +181,55 @@ export function PayloadView({ payload, binding, title, kindLabel, lead, forms, c
         <JsonBlock value={payload.raw} />
       </details>
     </>
+  );
+}
+
+/**
+ * An artifact the agent streamed in chunks: the assembled artifact, then each chunk with its own
+ * validation, raw JSON and traffic.
+ */
+export function StreamedArtifactEvent({ artifact, onShowTraffic, forms }: { artifact: StreamedArtifact; onShowTraffic: (id: string) => void; forms?: FormHandler }) {
+  const findings = artifact.chunks.flatMap((c) => c.result.payload?.validation.findings ?? []);
+  const counts = countFindings(findings);
+  const level = counts.errors ? 'chip-fail' : counts.warnings ? 'chip-mixed' : 'chip-pass';
+  const callFindings = artifact.chunks.some((c) => (c.result.call.findings ?? []).length > 0);
+  return (
+    <div className="bubble bubble-agent">
+      <p className="bubble-head">
+        <strong>Agent</strong>
+        <span className="pill">{kindLabels['artifact-update']}</span>
+        {artifact.taskId && (
+          <span className="faint small mono" title={artifact.taskId}>
+            {shortId(artifact.taskId)}
+          </span>
+        )}
+        <span className="pill">{artifact.chunks.length} chunks</span>
+        <span className={`chip ${level}`}>{describeCounts(counts)}</span>
+      </p>
+      <div className="artifact">
+        <p className="faint small">Artifact {artifact.name ?? artifact.artifactId}</p>
+        {artifact.parts.map((part, j) => (
+          <PartContent key={j} part={part} form={forms && { ...forms, key: `${forms.key}:a0p${j}` }} />
+        ))}
+      </div>
+      <details open={counts.errors > 0 || callFindings}>
+        <summary>Chunks</summary>
+        <ol className="chunks">
+          {artifact.chunks.map((chunk, i) => (
+            <li key={chunk.id}>
+              {chunk.result.payload && (
+                <PayloadView payload={chunk.result.payload} binding={chunk.binding} lead={<strong>Chunk {i + 1}</strong>}>
+                  {(chunk.result.call.findings ?? []).length > 0 && <FindingList findings={chunk.result.call.findings ?? []} />}
+                </PayloadView>
+              )}
+              <p className="bubble-foot faint small">
+                {chunk.result.call.latencyMs} ms <TrafficLink result={chunk.result} onShowTraffic={onShowTraffic} />
+              </p>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </div>
   );
 }
 

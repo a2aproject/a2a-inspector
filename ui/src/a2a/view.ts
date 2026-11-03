@@ -36,6 +36,10 @@ export interface EventView {
   /** A message's parts, or the parts of a status's message. */
   parts: PartView[];
   artifacts: ArtifactView[];
+  /** An artifact update that extends the artifact sent before it with the same ID. */
+  append?: boolean;
+  /** An artifact update that carries the artifact's last chunk. */
+  lastChunk?: boolean;
 }
 
 /** Turns "TASK_STATE_INPUT_REQUIRED" or "ROLE_AGENT" into "input-required" or "agent". */
@@ -145,6 +149,8 @@ function build(shape: Shape, kind: EventKind, obj: JSONObject): EventView {
   }
   if (kind === 'artifact-update') {
     view.artifacts = artifacts(shape, [obj.artifact]);
+    view.append = obj.append === true;
+    view.lastChunk = member(obj, 'lastChunk', 'last_chunk') === true;
     return view;
   }
   const status = asObject(obj.status);
