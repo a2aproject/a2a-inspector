@@ -26,6 +26,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"slices"
@@ -37,6 +38,7 @@ import (
 	"github.com/a2aproject/a2a-inspector/internal/agents"
 	"github.com/a2aproject/a2a-inspector/internal/catalog"
 	"github.com/a2aproject/a2a-inspector/internal/egress"
+	"github.com/a2aproject/a2a-inspector/internal/serve"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -127,7 +129,9 @@ type Server struct {
 	sessions *sessions
 	startup  *startupConfig
 	// shared is the agents of Options.Catalog.
-	shared       *catalog.Result
+	shared *catalog.Result
+	// echo runs the echo agents of a local inspector; nil when hosted.
+	echo         *serve.Runner
 	mux          *http.ServeMux
 	cookieName   string
 	anyHost      bool
@@ -203,6 +207,11 @@ func New(opts Options) (*Server, error) {
 	} else {
 		s.anyHost, s.allowedHosts = allowedHosts(opts.Host, opts.Port)
 		s.local = s.newSession("", nil)
+		// Echo agents listen on loopback, which an egress policy blocks
+		// unless it allows it.
+		if opts.Egress == nil || opts.Egress.Allows(netip.AddrFrom4([4]byte{127, 0, 0, 1})) {
+			s.echo = &serve.Runner{}
+		}
 		startup, err := s.newStartupConfig()
 		if err != nil {
 			return nil, err
@@ -229,6 +238,11 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.withConnection(s.handleDeletePushConfig))
 	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.withConnection(s.handleExtendedCard))
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
+	if s.echo != nil {
+		s.mux.HandleFunc("POST /api/serve", s.handleServe)
+		s.mux.HandleFunc("GET /api/serve", s.handleListServe)
+		s.mux.HandleFunc("DELETE /api/serve/{id}", s.handleStopServe)
+	}
 	if s.webhooks() {
 		s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
 		s.mux.HandleFunc("GET /api/hooks", s.handleHooks)
@@ -242,11 +256,15 @@ func New(opts Options) (*Server, error) {
 }
 
 // Close ends the long-lived streams, such as the traffic feed, so the HTTP
-// server can shut down, and closes the connections to agents.
+// server can shut down, closes the connections to agents and stops the echo
+// agents.
 func (s *Server) Close() {
 	s.cancel()
 	if s.local != nil {
 		s.local.destroy()
+	}
+	if s.echo != nil {
+		s.echo.Close()
 	}
 	if s.sessions != nil {
 		s.sessions.closeAll()

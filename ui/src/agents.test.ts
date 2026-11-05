@@ -229,6 +229,19 @@ describe('saved and catalog agents', () => {
     expect(state.selectedId).toBe('s');
   });
 
+  it('keeps echo agents apart from saved agents with the same card URL', () => {
+    const echo = (id: string, echoId: string) =>
+      createAgent(id, { kind: 'card', url: cardUrl, echo: { id: echoId, name: 'Echo', interface: iface('JSONRPC'), cardUrl, command: 'a2a server', startTime: '' } });
+    const state = run(
+      { type: 'addEntries', entries: [saved('s')] },
+      { type: 'addEntries', entries: [echo('e1', 'echo-1'), echo('again', 'echo-1'), echo('e2', 'echo-2')] },
+      { type: 'resolved', id: 'e1', result: resolved('Echo') },
+    );
+    expect(state.agents.map((a) => a.id)).toEqual(['s', 'e1', 'e2']);
+    expect(state.agents[1]).toMatchObject({ status: 'done' });
+    expect(findAgent(state.agents, cardUrl)?.id).toBe('s');
+  });
+
   it('selects a saved endpoint again instead of adding it twice', () => {
     const endpoint = { ...iface('JSONRPC'), source: 'custom' };
     const state = run(

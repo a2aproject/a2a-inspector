@@ -1,14 +1,17 @@
-import { type CSSProperties, useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { type CSSProperties, lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   type AgentEntry,
   afterSessionLoss,
   agentsReducer,
   countFindings,
+  createAgent,
+  editable,
   findAgent,
   initialAgentsState,
   sameAgent,
   selectedInterfaceOf,
   type TaskActivity,
+  unsaved,
   withoutConnection,
 } from './agents';
 import { viewPayload, viewPushConfig, viewPushConfigs } from './a2a/view';
@@ -21,6 +24,7 @@ import type {
   Config,
   Connection,
   ConnectionRequest,
+  EchoAgent,
   ListTasksQuery,
   SendRequest,
 } from './api/types';
@@ -28,6 +32,7 @@ import { asObject, asObjects } from './card';
 import { agentsFromCatalog, loadAgents, saveAgents, toCatalog } from './catalog';
 import { AgentList } from './components/AgentList';
 import type { CatalogView } from './components/CatalogDiscovery';
+import type { ServedInterface, ServeOutcome } from './components/CardEditorPanel';
 import { CardView } from './components/CardView';
 import { ChatPanel, type SentEcho } from './components/ChatPanel';
 import { ResizeHandle } from './components/ResizeHandle';
@@ -36,6 +41,7 @@ import { type TaskOperation, TasksPanel } from './components/TasksPanel';
 import { ThemeToggle } from './components/ThemeToggle';
 import { TrafficPanel } from './components/TrafficPanel';
 import { ValidationPanel } from './components/ValidationPanel';
+import { templates } from './editor/templates';
 import { type Layout, type Side, useLayout } from './layout';
 import {
   type ConnectionSettings,
@@ -51,6 +57,9 @@ import { taskRef } from './tasks';
 import { useTraffic } from './traffic';
 
 const panelIds: Record<Side, string> = { left: 'agents-panel', right: 'details-panel' };
+
+// The editor is most of the UI's code, so it loads the first time it opens.
+const CardEditorPanel = lazy(() => import('./components/CardEditorPanel').then((m) => ({ default: m.CardEditorPanel })));
 const coreBindings = ['JSONRPC', 'HTTP+JSON', 'GRPC'];
 
 /** Grid columns for the open panels and their handles. Side panels never take more than part of the window. */
@@ -100,6 +109,11 @@ function duration(seconds: number): string {
 
 let nextItem = 1;
 const itemId = () => `item-${nextItem++}`;
+
+/** The agent for an echo agent the inspector runs: reached through the card it serves. */
+function echoEntry(id: string, echo: EchoAgent): AgentEntry {
+  return createAgent(id, { kind: 'card', url: echo.cardUrl, echo });
+}
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -253,6 +267,13 @@ export function App() {
         } else {
           dispatch({ type: 'shared', entries: [] });
         }
+        // Echo agents outlive the page: they run until the inspector stops them.
+        if (config.features.serve) {
+          api.echoAgents().then(
+            ({ agents: running }) => dispatch({ type: 'addEntries', entries: running.map((echo) => echoEntry(newId(), echo)) }),
+            () => undefined,
+          );
+        }
         const startup = config.startup;
         const settings = settingsFromHeaders(startup?.headers ?? []);
         const existing = config.agentCardUrl ? findAgent(saved, config.agentCardUrl) : undefined;
@@ -283,6 +304,15 @@ export function App() {
     if (session.state !== 'ready') return;
     savedCatalog.current = saveAgents(toCatalog(agents, { envSecrets }), savedCatalog.current);
   }, [agents, envSecrets, session.state]);
+
+  // Drafts in the editor aren't saved, so leaving the page with unsaved changes asks first.
+  const hasUnsaved = agents.some(unsaved);
+  useEffect(() => {
+    if (!hasUnsaved) return;
+    const ask = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [hasUnsaved]);
 
   const [catalogView, setCatalogView] = useState<CatalogView>();
   const [notice, setNotice] = useState<{ error: boolean; text: string }>();
@@ -344,6 +374,69 @@ export function App() {
     dispatch({ type: 'select', id });
     const agent = agents.find((a) => a.id === id);
     if (agent?.status === 'idle') resolveAgent(agent);
+    if (agent?.echo && !agent.echo.exited) {
+      // It may have stopped by itself since.
+      const echoId = agent.echo.id;
+      api.echoAgents().then(
+        ({ agents: running }) => {
+          const echo = running.find((e) => e.id === echoId) ?? { ...agent.echo!, exited: 'The inspector no longer runs this echo agent.' };
+          if (echo.exited) dispatch({ type: 'echoStatus', id, echo });
+        },
+        () => undefined,
+      );
+    }
+  }
+
+  function removeAgent(id: string) {
+    const agent = agents.find((a) => a.id === id);
+    streams.current.get(id)?.abort();
+    for (const [key, abort] of subscriptions.current) {
+      if (key.startsWith(`${id}\n`)) abort.abort();
+    }
+    removed.current.add(id);
+    if (agent?.connection) api.disconnect(agent.connection.id).catch(() => undefined);
+    if (agent?.echo) api.stopEcho(agent.echo.id).catch(() => undefined);
+    dispatch({ type: 'remove', id });
+  }
+
+  /** Opens a new card in the editor: the template, or a copy of another agent's card. */
+  function newCard(card: unknown = templates['1.0']) {
+    const id = newId();
+    dispatch({ type: 'newCard', id, identifier: `urn:uuid:${crypto.randomUUID()}`, card });
+    resolveAgent({ id, url: '', card, settings: defaultSettings });
+  }
+
+  function editAgent(agent: AgentEntry) {
+    if (editable(agent)) dispatch({ type: 'edit', id: agent.id });
+    else if (agent.result?.payload) newCard(agent.result.payload.raw);
+  }
+
+  function saveCard(agent: AgentEntry, card: unknown) {
+    dispatch({ type: 'saveCard', id: agent.id, card });
+    resolveAgent({ ...agent, card });
+  }
+
+  const validateCard = useCallback((card: unknown) => retryRenewed(() => api.validateCard(card)), []);
+
+  /** Saves the card and serves it as an echo agent, which replaces the card's earlier ones and opens in the chat. */
+  async function serveCard(agent: AgentEntry, card: unknown, iface: ServedInterface): Promise<ServeOutcome> {
+    if (agent.draft?.text !== agent.draft?.saved) saveCard(agent, card);
+    let echo: EchoAgent;
+    try {
+      echo = await api.serve({ card, interface: iface, source: agent.identifier });
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'serveNotInstalled') {
+        const { installHint, command } = err.details;
+        return { ok: false, error: err.message, installHint: String(installHint ?? ''), command: String(command ?? '') };
+      }
+      return { ok: false, error: message(err) };
+    }
+    for (const old of agents.filter((a) => a.echo && a.echo.source === agent.identifier)) removeAgent(old.id);
+    const id = newId();
+    dispatch({ type: 'addEntries', entries: [echoEntry(id, echo)], select: id });
+    resolveAgent({ id, url: echo.cardUrl, card: undefined, settings: defaultSettings });
+    setTab('chat');
+    return { ok: true };
   }
 
   /** Returns the agent's connection, connecting again when the interface or settings changed. */
@@ -560,6 +653,7 @@ export function App() {
   }
 
   const selected = agents.find((a) => a.id === selectedId);
+  const echoSource = selected?.echo?.source ? agents.find((a) => !a.echo && a.identifier === selected.echo?.source) : undefined;
   const findings = selected?.result?.payload?.validation.findings ?? [];
   const counts = countFindings(findings);
   const problems = counts.errors + counts.warnings;
@@ -658,16 +752,8 @@ export function App() {
             notice={notice}
             onAdd={addAgent}
             onSelect={selectAgent}
-            onRemove={(id) => {
-              const agent = agents.find((a) => a.id === id);
-              streams.current.get(id)?.abort();
-              for (const [key, abort] of subscriptions.current) {
-                if (key.startsWith(`${id}\n`)) abort.abort();
-              }
-              removed.current.add(id);
-              if (agent?.connection) api.disconnect(agent.connection.id).catch(() => undefined);
-              dispatch({ type: 'remove', id });
-            }}
+            onRemove={removeAgent}
+            onNewCard={() => newCard()}
             onListCatalog={(url, credentials) => void listCatalog(url, credentials)}
             onAddFromCatalog={addFromCatalog}
             onCloseCatalog={() => setCatalogView(undefined)}
@@ -687,19 +773,55 @@ export function App() {
               onOpen={() => setOpen('left', true)}
             />
           )}
-          <CardView
-            agent={selected}
-            bindings={bindings}
-            stale={stale}
-            envSecrets={envSecrets}
-            onSelectInterface={(index) => selected && dispatch({ type: 'selectInterface', id: selected.id, index })}
-            onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
-            onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}
-            onSettings={(settings) => selected && dispatch({ type: 'settings', id: selected.id, settings })}
-            onFetchCard={() => selected && resolveAgent(selected)}
-            onFetchExtendedCard={() => selected && void fetchExtendedCard(selected)}
-            onShowTraffic={showTraffic}
-          />
+          {selected?.draft ? (
+            <section className="panel center" aria-label="Card editor">
+              <Suspense
+                fallback={
+                  <p role="status" className="notice">
+                    Loading the editor…
+                  </p>
+                }
+              >
+                <CardEditorPanel
+                  key={selected.id}
+                  agent={selected}
+                  draft={selected.draft}
+                  serve={!!config?.features.serve}
+                  echoes={agents.filter((a) => a.echo && a.echo.source === selected.identifier)}
+                  onChange={(text) => dispatch({ type: 'draft', id: selected.id, text })}
+                  onSave={(card) => saveCard(selected, card)}
+                  onDiscard={() => dispatch({ type: 'discardDraft', id: selected.id })}
+                  onClose={() => dispatch({ type: 'closeEditor', id: selected.id })}
+                  onValidate={validateCard}
+                  onServe={(card, iface) => serveCard(selected, card, iface)}
+                  onOpen={selectAgent}
+                  onStop={removeAgent}
+                />
+              </Suspense>
+            </section>
+          ) : (
+            <CardView
+              agent={selected}
+              bindings={bindings}
+              stale={stale}
+              envSecrets={envSecrets}
+              onSelectInterface={(index) => selected && dispatch({ type: 'selectInterface', id: selected.id, index })}
+              onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
+              onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}
+              onSettings={(settings) => selected && dispatch({ type: 'settings', id: selected.id, settings })}
+              onFetchCard={() => selected && resolveAgent(selected)}
+              onFetchExtendedCard={() => selected && void fetchExtendedCard(selected)}
+              onShowTraffic={showTraffic}
+              onEdit={() => selected && editAgent(selected)}
+              echoSource={echoSource}
+              onOpenSource={() => {
+                if (!echoSource) return;
+                selectAgent(echoSource.id);
+                dispatch({ type: 'edit', id: echoSource.id });
+              }}
+              onStopEcho={() => selected && removeAgent(selected.id)}
+            />
+          )}
           {layout.right.open && (
             <ResizeHandle
               side="right"

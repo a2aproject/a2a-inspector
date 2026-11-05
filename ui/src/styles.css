@@ -1514,3 +1514,63 @@ table.headers th {
   display: grid;
   gap: 8px;
 }
+
+/* Card editor */
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.editor-toolbar select {
+  width: auto;
+}
+.editor-toolbar .spacer {
+  flex: 1;
+}
+.card-editor {
+  height: clamp(320px, 60vh, 760px);
+}
+.card-editor-panel > .card {
+  margin-top: 16px;
+}
+.serve .row {
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 8px;
+}
+.serve select {
+  width: auto;
+}
+.serve .notice {
+  margin-top: 12px;
+}
+.echoes {
+  margin-top: 10px;
+}
+pre.command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.echo-info {
+  margin-bottom: 20px;
+}
+.finding .link-button.path {
+  color: var(--text);
+}
+.catalog-file {
+  flex-wrap: wrap;
+}
+.list-heading {
+  margin: 16px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.list-heading + .agent-list {
+  margin-top: 6px;
+}

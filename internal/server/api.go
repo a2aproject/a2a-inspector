@@ -74,6 +74,7 @@ type callError struct {
 }
 
 type features struct {
+	// Serve is set when the UI can start echo agents with POST /api/serve.
 	Serve    bool `json:"serve"`
 	Webhooks bool `json:"webhooks"`
 	// EnvSecrets is set when secrets can refer to the inspector's
@@ -157,7 +158,7 @@ func (s *Server) config() configResponse {
 		Mode:                  "local",
 		AgentCardURL:          s.opts.AgentCardURL,
 		Startup:               s.startup,
-		Features:              features{Webhooks: true, EnvSecrets: true, SharedCatalog: s.shared != nil},
+		Features:              features{Serve: s.echo != nil, Webhooks: true, EnvSecrets: true, SharedCatalog: s.shared != nil},
 		Bindings:              bindings,
 		WebhookBaseURL:        s.webhookBaseURL(),
 		DefaultWebhookBaseURL: s.defaultWebhookURL,

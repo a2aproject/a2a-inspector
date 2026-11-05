@@ -168,8 +168,8 @@ export interface Config {
   agentCardUrl?: string;
   startup?: Startup;
   /**
-   * envSecrets: secrets can refer to the inspector's environment variables. sharedCatalog: GET
-   * /api/catalog lists agents for every user.
+   * serve: the inspector can start echo agents for cards. envSecrets: secrets can refer to the
+   * inspector's environment variables. sharedCatalog: GET /api/catalog lists agents for every user.
    */
   features: { serve: boolean; webhooks: boolean; envSecrets: boolean; sharedCatalog?: boolean };
   /** Protocol bindings the inspector supports. */
@@ -178,6 +178,29 @@ export interface Config {
   webhookBaseUrl?: string;
   /** The webhook base URL from the command line, or the inspector's own address. */
   defaultWebhookBaseUrl?: string;
+}
+
+/** An echo agent the inspector started with a2a-cli for a card. */
+export interface EchoAgent {
+  id: string;
+  /** The catalog identifier of the card it serves. */
+  source?: string;
+  name: string;
+  /** The one interface it serves, on 127.0.0.1; its card lists only this one. */
+  interface: AgentInterface;
+  cardUrl: string;
+  /** How a2a-cli was started. */
+  command: string;
+  /** RFC 3339. */
+  startTime: string;
+  /** Set when it stopped by itself: why, with the end of its output. */
+  exited?: string;
+}
+
+export interface ServeRequest {
+  card: unknown;
+  interface?: { protocolBinding: string; protocolVersion: string };
+  source?: string;
 }
 
 /** A task waiting for the user, which the connection's next message continues. */

@@ -1,8 +1,20 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { EditorView } from '@codemirror/view';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import type { AgentResult, CardResolveResponse, CatalogAgent, CatalogResolveResponse, Config, Connection, Notification, TrafficEntry } from './api/types';
+import type {
+  AgentInterface,
+  AgentResult,
+  CardResolveResponse,
+  CatalogAgent,
+  CatalogResolveResponse,
+  Config,
+  Connection,
+  EchoAgent,
+  Notification,
+  TrafficEntry,
+} from './api/types';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -1055,6 +1067,170 @@ describe('App', () => {
       expect(panel().queryByRole('button', { name: 'Remove Team echo' })).not.toBeInTheDocument();
       expect(panel().getByRole('button', { name: 'Remove Own agent' })).toBeInTheDocument();
       expect(panel().queryByText('Old shared')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('card authoring', () => {
+    const serveConfig: Config = { ...config, features: { ...config.features, serve: true } };
+    const panel = () => within(screen.getByRole('navigation', { name: 'Agents' }));
+    const templateInterface: AgentInterface = { url: 'https://agent.example.com/a2a', protocolBinding: 'JSONRPC', protocolVersion: '1.0', supported: true, source: 'supportedInterfaces[0]' };
+    const valid = (interfaces: AgentInterface[] = [templateInterface]) =>
+      json({ protocolVersion: '1.0', versions: ['1.0'], validation: { findings: [] }, interfaces, defaultInterface: interfaces.length ? 0 : null });
+    const echo: EchoAgent = {
+      id: 'echo-1',
+      name: 'My Agent',
+      interface: { url: 'http://127.0.0.1:41123', protocolBinding: 'JSONRPC', protocolVersion: '1.0', supported: true, source: 'supportedInterfaces[0]' },
+      cardUrl: 'http://127.0.0.1:41123/.well-known/agent-card.json',
+      command: 'a2a server --card /tmp/cards/echo-1.json --echo --host 127.0.0.1 --port 41123 --serve-transport jsonrpc --protocol latest',
+      startTime: '2026-11-04T10:00:00Z',
+    };
+    const echoCard: CardResolveResponse = {
+      ...resolved,
+      cardUrl: echo.cardUrl,
+      versions: ['1.0'],
+      payload: { protocolVersion: '1.0', raw: { name: 'My Agent', supportedInterfaces: [echo.interface] }, validation: { findings: [] } },
+      interfaces: [echo.interface],
+      defaultInterface: 0,
+    };
+    const calls = (fetch: ReturnType<typeof mockApi>, url: string, method = 'GET') =>
+      fetch.mock.calls.filter(([u, init]) => u === url && (init?.method ?? 'GET') === method).map(([, init]) => init);
+    const savedEntries = () => (JSON.parse(localStorage.getItem('a2a-inspector.agents') ?? '{}') as { entries: Record<string, unknown>[] }).entries;
+    // The editor is in a shadow root, out of reach of the queries.
+    const editorView = () => EditorView.findFromDOM(document.querySelector('.card-editor')!.shadowRoot!.querySelector<HTMLElement>('.cm-editor')!)!;
+    const editorText = () => editorView().state.doc.toString();
+
+    /** The editor panel, once the editor in it has loaded. */
+    async function editorPanel() {
+      await screen.findByRole('button', { name: 'Close editor' });
+      return screen.getByRole('region', { name: 'Card editor' });
+    }
+
+    async function openNewCard(user: ReturnType<typeof userEvent.setup>) {
+      await screen.findByRole('navigation', { name: 'Agents' });
+      await user.click(panel().getByRole('button', { name: 'New card' }));
+      return editorPanel();
+    }
+
+    it('writes a new card from the template, checks it as it changes, and saves it in the catalog', async () => {
+      const fetch = mockApi({ '/api/config': () => json(serveConfig), '/api/serve': () => json({ agents: [] }), '/api/card:validate': () => valid() });
+      const user = userEvent.setup();
+      render(<App />);
+      const editor = await openNewCard(user);
+      expect(JSON.parse(editorText())).toMatchObject({ name: 'My Agent', supportedInterfaces: [{ protocolBinding: 'JSONRPC' }] });
+      expect(within(editor).getByRole('button', { name: 'Save' })).toBeDisabled();
+      expect(savedEntries()).toMatchObject([{ identifier: expect.stringMatching(/^urn:uuid:/), data: { name: 'My Agent' } }]);
+
+      const card = { ...(JSON.parse(editorText()) as object), name: 'Weather' };
+      act(() => editorView().dispatch({ changes: { from: 0, to: editorView().state.doc.length, insert: JSON.stringify(card, null, 2) } }));
+      expect(await panel().findByText('unsaved')).toBeInTheDocument();
+      expect(within(editor).getByRole('button', { name: 'Close editor' })).toBeDisabled();
+      const leave = () => {
+        const e = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      };
+      expect(leave()).toBe(true);
+      await waitFor(() => expect(calls(fetch, '/api/card:validate', 'POST').some((init) => String(init?.body).includes('Weather'))).toBe(true));
+
+      await user.click(within(editor).getByRole('button', { name: 'Save' }));
+      expect(await within(editor).findByRole('heading', { name: 'Weather' })).toBeInTheDocument();
+      expect(panel().queryByText('unsaved')).not.toBeInTheDocument();
+      expect(leave()).toBe(false);
+      expect(savedEntries()).toMatchObject([{ data: { name: 'Weather' } }]);
+
+      await user.click(within(editor).getByRole('button', { name: 'Close editor' }));
+      expect(await screen.findByRole('button', { name: 'Edit card' })).toBeInTheDocument();
+    });
+
+    it('serves the card as an echo agent, which opens and is not saved', async () => {
+      const fetch = mockApi({
+        '/api/config': () => json(serveConfig),
+        '/api/serve': (init) => {
+          if (init?.method !== 'POST') return json({ agents: [] });
+          return json({ ...echo, source: (JSON.parse(String(init.body)) as { source: string }).source }, 201);
+        },
+        '/api/card:validate': () => valid(),
+        '/api/card:resolve': () => json(echoCard),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      const editor = await openNewCard(user);
+      const serve = within(editor).getByRole('region', { name: 'Serve' });
+      expect(within(serve).getByLabelText('Interface')).toHaveValue('JSONRPC 1.0');
+      await user.click(within(serve).getByRole('button', { name: 'Serve' }));
+
+      const info = await screen.findByRole('region', { name: 'Echo agent' });
+      expect(within(info).getByText(echo.command)).toBeInTheDocument();
+      const [req] = calls(fetch, '/api/serve', 'POST');
+      expect(JSON.parse(String(req?.body))).toMatchObject({
+        card: { name: 'My Agent' },
+        interface: { protocolBinding: 'JSONRPC', protocolVersion: '1.0' },
+        source: savedEntries()[0]?.identifier,
+      });
+      expect(JSON.parse(String(calls(fetch, '/api/card:resolve', 'POST')[0]?.body))).toEqual({ url: echo.cardUrl });
+      expect(panel().getByRole('heading', { name: 'Echo agents' })).toBeInTheDocument();
+      expect(panel().getByRole('button', { name: 'Stop My Agent' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Edit a copy' })).not.toBeInTheDocument();
+      expect(savedEntries()).toHaveLength(1);
+
+      await user.click(within(info).getByRole('button', { name: 'the card from the editor' }));
+      expect(await editorPanel()).toBeInTheDocument();
+    });
+
+    it('shows how to install a2a-cli and the command it would run', async () => {
+      mockApi({
+        '/api/config': () => json(serveConfig),
+        '/api/serve': (init) =>
+          init?.method === 'POST'
+            ? json(
+                {
+                  error: {
+                    message: "A2a-cli isn't installed: neither a2a nor a2a-cli is on the PATH.",
+                    code: 'serveNotInstalled',
+                    installHint: 'Install a2a-cli with `brew install a2a`.',
+                    command: "a2a server --card '<card file>' --echo --host 127.0.0.1 --port '<free port>' --serve-transport jsonrpc --protocol latest",
+                  },
+                },
+                409,
+              )
+            : json({ agents: [] }),
+        '/api/card:validate': () => valid(),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      const editor = await openNewCard(user);
+      await user.click(within(editor).getByRole('button', { name: 'Serve' }));
+      const alert = await within(editor).findByRole('alert');
+      expect(alert).toHaveTextContent("A2a-cli isn't installed");
+      expect(alert).toHaveTextContent('brew install a2a');
+      expect(alert).toHaveTextContent("a2a server --card '<card file>' --echo");
+    });
+
+    it('lists the echo agents the inspector runs and stops them', async () => {
+      const fetch = mockApi({
+        '/api/config': () => json(serveConfig),
+        '/api/serve': () => json({ agents: [echo] }),
+        '/api/serve/echo-1': () => new Response(null, { status: 204 }),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await screen.findByRole('navigation', { name: 'Agents' });
+      await user.click(await panel().findByRole('button', { name: 'Stop My Agent' }));
+      expect(calls(fetch, '/api/serve/echo-1', 'DELETE')).toHaveLength(1);
+      expect(panel().queryByRole('heading', { name: 'Echo agents' })).not.toBeInTheDocument();
+    });
+
+    it('edits a copy of a fetched card, without Serve on an inspector that has none', async () => {
+      mockApi({ '/api/config': () => json(config), '/api/card:resolve': () => json(resolved), '/api/card:validate': () => valid([]) });
+      const user = userEvent.setup();
+      render(<App />);
+      await user.type(await screen.findByLabelText('Agent card URL'), 'localhost:9999');
+      await user.click(addAgentButton());
+      await user.click(await screen.findByRole('button', { name: 'Edit a copy' }));
+      const editor = await editorPanel();
+      expect(JSON.parse(editorText())).toEqual(resolved.payload?.raw);
+      expect(panel().getAllByRole('button', { name: /^Echo Agent/ })).toHaveLength(2);
+      expect(within(editor).queryByRole('region', { name: 'Serve' })).not.toBeInTheDocument();
     });
   });
 });
