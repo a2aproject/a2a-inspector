@@ -23,6 +23,7 @@ The **A2A Inspector** (`a2a-inspector`) is a web-based tool for developers of [A
 - **Auth:** bearer, basic and API key presets and custom headers. Secrets stay in the inspector's backend.
 - **Traffic:** every HTTP exchange and gRPC call as it went over the wire, with each response validated.
 - **Saved agents and AI Catalogs:** agents are saved in the browser as an [AI Catalog](https://ai-catalog.io/), export and import as a catalog file, and can be added from any catalog URL.
+- **Card editor:** writes and edits cards with suggestions and documentation from the card schema and the inspector's checks as you type, and serves a card as a local echo agent to talk to.
 
 Built on [A2A Protocol v1.0](https://a2a-protocol.org/v1.0.0/specification/), and works with v0.3 agents too.
 
@@ -75,6 +76,12 @@ The inspector saves the agents you add in the browser, as an [AI Catalog](https:
 
 `--catalog <file or URL>` lists a catalog's agents for every user, marked as shared, and they can't be removed.
 
+## Writing and serving cards
+
+**New card** opens a v1.0 card template in the editor, and **Edit card** opens one you wrote before; for a card fetched from an agent, **Edit a copy** starts from it. Ctrl+Space suggests the fields and values the card's version allows, the pointer resting on a field shows its documentation, and the inspector's findings appear in place as you type. Cards are saved with your agents, as catalog entries that hold the card.
+
+**Serve** runs the card as an echo agent on this machine and opens it: the agent answers every message with the message's text, so you can try the card with the rest of the inspector. The inspector has no serving code of its own: it starts [a2a-cli](https://github.com/a2aproject/a2a-cli) as `a2a server --card <file> --echo` on a free `127.0.0.1` port, with `a2a` or `a2a-cli` from the `PATH`, and stops it when you do or when the inspector exits. The card it serves has a single interface, on that port, with the binding and version you pick in place of the card's. Echo agents are listed above the saved agents while the inspector runs them. With `--egress=public`, Serve needs `--egress-allow 127.0.0.1`, since echo agents listen on loopback. A shared instance has no Serve.
+
 ## Running a shared instance
 
 `a2a-inspector --hosted` runs the inspector as a service for multiple users:
@@ -82,7 +89,7 @@ The inspector saves the agents you add in the browser, as an [AI Catalog](https:
 - **Sessions:** every browser gets its own session, from a cookie set on its first API call, with its own connections, credentials and traffic. Sessions live in memory and end after `--session-idle-timeout` (10 minutes) without an open tab, or after `--session-max-age` (8 hours). Run a single instance.
 - **Access:** the inspector doesn't sign users in. Who can reach it is up to where you deploy it, for example your platform's access control or an authenticating proxy in front of it. Serve it over HTTPS: the session cookie is `Secure`, which browsers keep over plain HTTP only on `localhost`.
 - **Egress:** it connects only to public addresses, so users can't reach the network it runs in or a cloud metadata server. `--egress-allow` adds exceptions: CIDR blocks, IP addresses, host names or `*.example.com`. The check applies to every transport and redirect. Requests go through `HTTPS_PROXY` when it's set; the proxy resolves names again, so it should apply its own egress rules too. Locally, `--egress=public` turns on the same policy.
-- **Switches:** the webhook receiver is off, since agents can't reach an instance behind access control, and secrets can't refer to the server's environment variables.
+- **Switches:** the webhook receiver is off, since agents can't reach an instance behind access control, secrets can't refer to the server's environment variables, and Serve is off.
 - **Shared agents:** `--catalog` preloads agents for every user, with no credentials: users enter their own for agents that need them.
 - **Limits:** `--max-sessions` (500), and per session `--max-connections` (20), `--max-streams` (8), `--traffic-buffer-mib` (4), `--request-rate` (5 per second) and `--session-egress-rate` (10 requests to agents per second). `--egress-rate` (200 per second) caps requests to agents over all sessions, and `--max-stream-duration` (30 minutes) ends long streams.
 - **Limits per client:** a client that drops its cookie gets a new session, so per-session limits alone don't stop one client from using up the shared ones. `--client-header` names a header the proxy in front of the inspector sets to identify the client: `X-Forwarded-For` for its address, or a header with the signed-in user from an authenticating proxy. A client then has at most `--client-max-sessions` (10) sessions, starts 10 at once and then one every 10 seconds, and makes up to `--client-egress-rate` (50 per second) requests to agents. `--trusted-proxies` (1) is how many proxies add an entry to the header; the client is the entry that many from the end, so entries a client adds itself are ignored. IPv6 addresses count per /64. Use a header clients can't set past the proxy, and leave this off when many users share an address, such as event attendees on one network.

@@ -93,6 +93,8 @@ export function toCatalog(agents: AgentEntry[], { envSecrets, exported = false }
   const entries: CatalogEntry[] = [];
   const endpoints: SavedAgent[] = [];
   for (const agent of agents) {
+    // Echo agents end with the inspector.
+    if (agent.echo) continue;
     const saved = savedAgent(agent, envSecrets, exported);
     if (agent.kind === 'endpoint') {
       endpoints.push(saved);

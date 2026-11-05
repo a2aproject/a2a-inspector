@@ -9,10 +9,12 @@ import type {
   Config,
   Connection,
   ConnectionRequest,
+  EchoAgent,
   HeaderInput,
   ListTasksQuery,
   PushConfigRequest,
   SendRequest,
+  ServeRequest,
 } from './types';
 
 /** An error from the inspector's API itself, not from an agent. */
@@ -20,12 +22,15 @@ export class ApiError extends Error {
   readonly status: number;
   /** Names errors the UI acts on, such as "sessionRenewed". */
   readonly code?: string;
+  /** The rest of the error, such as the install hint of "serveNotInstalled". */
+  readonly details: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -62,13 +67,13 @@ function headersFor(init: RequestInit, accept: string): Headers {
 }
 
 async function apiError(resp: Response): Promise<ApiError> {
-  let body: { message?: string; code?: string } | undefined;
+  let body: ({ message?: string; code?: string } & Record<string, unknown>) | undefined;
   try {
-    body = ((await resp.json()) as { error?: { message?: string; code?: string } } | undefined)?.error;
+    body = ((await resp.json()) as { error?: typeof body } | undefined)?.error;
   } catch {
     // Not a JSON error body.
   }
-  const err = new ApiError(body?.message ?? `${resp.status} ${resp.statusText}`, resp.status, body?.code);
+  const err = new ApiError(body?.message ?? `${resp.status} ${resp.statusText}`, resp.status, body?.code, body);
   if (isSessionRenewed(err)) renewedListener?.();
   return err;
 }
@@ -161,4 +166,8 @@ export const api = {
   deletePushConfig: (id: string, taskId: string, configId: string) =>
     request<AgentResult>(`${pushConfigs(id, taskId)}/${encodeURIComponent(configId)}`, { method: 'DELETE' }),
   extendedCard: (id: string) => request<AgentResult>(`${conn(id)}/extendedAgentCard`),
+  /** Starts an echo agent for a card with a2a-cli. */
+  serve: (req: ServeRequest) => request<EchoAgent>('/api/serve', post(req)),
+  echoAgents: () => request<{ agents: EchoAgent[] }>('/api/serve'),
+  stopEcho: (id: string) => request<void>(`/api/serve/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

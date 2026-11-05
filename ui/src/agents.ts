@@ -1,5 +1,17 @@
 import type { PushConfigView } from './a2a/view';
-import type { AgentInterface, AgentResult, CardResolveResponse, Connection, Conversation, Finding, ListTasksQuery, OpenTask, Preferences } from './api/types';
+import type {
+  AgentInterface,
+  AgentResult,
+  CardResolveResponse,
+  Connection,
+  Conversation,
+  EchoAgent,
+  Finding,
+  ListTasksQuery,
+  OpenTask,
+  Preferences,
+} from './api/types';
+import { cardText } from './editor/templates';
 import { type ConnectionSettings, defaultSettings, preferredInterface, settingsAfterSessionLoss } from './settings';
 
 /** One line of the chat with an agent. */
@@ -40,6 +52,14 @@ export interface TaskLookup {
 
 export type ExtendedCardState = { state: 'loading' } | { state: 'done'; result: AgentResult } | { state: 'failed'; error: string };
 
+/** A card open in the editor. */
+export interface CardDraft {
+  /** The text in the editor. */
+  text: string;
+  /** The text as last saved, to tell when there are unsaved changes. */
+  saved: string;
+}
+
 /** Identifies an interface, as saved. */
 export type InterfaceRef = Pick<AgentInterface, 'url' | 'protocolBinding' | 'protocolVersion' | 'tenant'>;
 
@@ -64,6 +84,10 @@ export interface AgentEntry {
   savedInterface?: InterfaceRef;
   /** From the inspector's shared catalog, so it can't be removed. */
   shared?: boolean;
+  /** Set while the card is open in the editor. Never saved. */
+  draft?: CardDraft;
+  /** An echo agent the inspector started for a card; it lasts as long as the inspector runs, so it isn't saved. */
+  echo?: EchoAgent;
   result?: CardResolveResponse;
   /** Set when the inspector rejected the request, for example an invalid URL. */
   error?: string;
@@ -120,6 +144,17 @@ export type AgentsAction =
   | { type: 'addEntries'; entries: AgentEntry[]; select?: string }
   /** The shared catalog's agents: marks those in the list, adds the others, and drops shared agents it no longer lists. */
   | { type: 'shared'; entries: AgentEntry[] }
+  /** Adds a card written in the editor, open in it, and selects it. */
+  | { type: 'newCard'; id: string; identifier: string; card: unknown }
+  /** Opens the agent's card in the editor. */
+  | { type: 'edit'; id: string }
+  | { type: 'draft'; id: string; text: string }
+  /** Saves the card the editor has, which keeps it open. */
+  | { type: 'saveCard'; id: string; card: unknown }
+  | { type: 'discardDraft'; id: string }
+  | { type: 'closeEditor'; id: string }
+  /** The echo agent's state, as the inspector reports it. */
+  | { type: 'echoStatus'; id: string; echo: EchoAgent }
   | { type: 'refresh'; id: string }
   | { type: 'resolved'; id: string; result: CardResolveResponse }
   | { type: 'failed'; id: string; error: string }
@@ -177,10 +212,10 @@ export function createAgent(id: string, init: Pick<AgentEntry, 'kind' | 'url'> &
 
 /**
  * The agent already in the list for a card reference: the same text as entered, or the same card
- * URL the backend resolved it to.
+ * URL the backend resolved it to. Echo agents don't count: they're processes, whatever their URL.
  */
 export function findAgent(agents: AgentEntry[], url: string): AgentEntry | undefined {
-  return url ? agents.find((a) => a.url === url || a.result?.cardUrl === url) : undefined;
+  return url ? agents.find((a) => !a.echo && (a.url === url || a.result?.cardUrl === url)) : undefined;
 }
 
 export function sameInterface(a: InterfaceRef | undefined, b: InterfaceRef | undefined): boolean {
@@ -192,6 +227,7 @@ export function sameInterface(a: InterfaceRef | undefined, b: InterfaceRef | und
  * from catalog entries, or the same interface for agents without a card.
  */
 export function sameAgent(a: AgentEntry, b: AgentEntry): boolean {
+  if (a.echo || b.echo) return !!a.echo && a.echo.id === b.echo?.id;
   if (a.kind === 'endpoint' || b.kind === 'endpoint') {
     return a.kind === b.kind && sameInterface(a.customInterfaces[0], b.customInterfaces[0]);
   }
@@ -293,6 +329,36 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
         selectedId: agents.some((a) => a.id === state.selectedId) ? state.selectedId : null,
       };
     }
+    case 'newCard': {
+      const text = cardText(action.card);
+      const entry = createAgent(action.id, { kind: 'card', url: '', identifier: action.identifier, card: action.card, draft: { text, saved: text } });
+      return { agents: [...state.agents, entry], selectedId: action.id };
+    }
+    case 'edit': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry || entry.card === undefined) return state;
+      const text = cardText(entry.card);
+      return { ...state, agents: patch(state.agents, action.id, { draft: entry.draft ?? { text, saved: text } }) };
+    }
+    case 'draft': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry?.draft) return state;
+      return { ...state, agents: patch(state.agents, action.id, { draft: { ...entry.draft, text: action.text } }) };
+    }
+    case 'saveCard': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry) return state;
+      return { ...state, agents: patch(state.agents, action.id, { card: action.card, draft: entry.draft && { ...entry.draft, saved: entry.draft.text } }) };
+    }
+    case 'discardDraft': {
+      const entry = state.agents.find((a) => a.id === action.id);
+      if (!entry?.draft) return state;
+      return { ...state, agents: patch(state.agents, action.id, { draft: { ...entry.draft, text: entry.draft.saved } }) };
+    }
+    case 'closeEditor':
+      return { ...state, agents: patch(state.agents, action.id, { draft: undefined }) };
+    case 'echoStatus':
+      return { ...state, agents: patch(state.agents, action.id, { echo: action.echo }) };
     case 'refresh':
       return { agents: patch(state.agents, action.id, { status: 'loading', error: undefined }), selectedId: action.id };
     case 'resolved': {
@@ -304,7 +370,9 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
       // fetched or saved.
       const cardUrl = action.result.cardUrl;
       const existing =
-        cardUrl && state.agents.find((a) => a.id !== action.id && a.kind === 'card' && a.card === undefined && (a.result?.cardUrl === cardUrl || a.url === cardUrl));
+        cardUrl &&
+        !entry.echo &&
+        state.agents.find((a) => a.id !== action.id && !a.echo && a.kind === 'card' && a.card === undefined && (a.result?.cardUrl === cardUrl || a.url === cardUrl));
       if (!existing) {
         return { ...state, agents: patch(state.agents, action.id, resolvedEntry(action.result, entry)) };
       }
@@ -471,7 +539,17 @@ export function identifierName(identifier: string | undefined): string {
 
 /** The catalog entry's name, the card's, the one saved from the card, the identifier's, or the URL. */
 export function agentName(agent: AgentEntry): string {
-  return agent.displayName || cardName(agent) || agent.savedName || identifierName(agent.identifier) || agent.url || 'Unnamed agent';
+  return agent.displayName || cardName(agent) || agent.savedName || agent.echo?.name || identifierName(agent.identifier) || agent.url || 'Unnamed agent';
+}
+
+/** Whether the card is open in the editor with changes that aren't saved. */
+export function unsaved(agent: AgentEntry): boolean {
+  return !!agent.draft && agent.draft.text !== agent.draft.saved;
+}
+
+/** Whether the user can change the card in place: one in their own list's catalog entry. */
+export function editable(agent: AgentEntry): boolean {
+  return agent.card !== undefined && !agent.shared && !agent.echo;
 }
 
 export interface FindingCounts {

@@ -64,6 +64,11 @@ func TestNewAllowList(t *testing.T) {
 	if p.addrAllowed(netip.MustParseAddr("192.168.1.6")) {
 		t.Error("addrAllowed(192.168.1.6) = true")
 	}
+	for ip, want := range map[string]bool{"10.9.9.9": true, "8.8.8.8": true, "127.0.0.1": false, "192.168.1.6": false} {
+		if got := p.Allows(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("Allows(%s) = %v, want %v", ip, got, want)
+		}
+	}
 	for host, want := range map[string]bool{
 		"agents.internal": true, "AGENTS.internal.": true, "x.agents.internal": false,
 		"a.lab.example": true, "a.b.lab.example": true, "lab.example": false, "evillab.example": false,

@@ -1,5 +1,5 @@
 import { type ChangeEvent, type SubmitEvent, useId, useRef, useState } from 'react';
-import { type AgentEntry, agentName, countFindings, describeCounts } from '../agents';
+import { type AgentEntry, agentName, countFindings, describeCounts, unsaved } from '../agents';
 import type { CatalogAgent } from '../api/types';
 import type { ConnectionSettings } from '../settings';
 import { CatalogDiscovery, type CatalogView } from './CatalogDiscovery';
@@ -23,11 +23,15 @@ interface Props {
   onCloseCatalog: () => void;
   onImport: (file: File) => void;
   onExport: () => void;
+  /** Opens a new card in the editor. */
+  onNewCard: () => void;
   onClose: () => void;
 }
 
 export function AgentList(props: Props) {
   const { id, hidden, agents, selectedId, onAdd, onSelect, onRemove, onClose } = props;
+  const echoes = agents.filter((a) => a.echo);
+  const saved = agents.filter((a) => !a.echo);
   const [url, setUrl] = useState('');
   const inputId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -83,6 +87,9 @@ export function AgentList(props: Props) {
         onClose={props.onCloseCatalog}
       />
       <div className="catalog-file">
+        <button type="button" className="button button-quiet" onClick={props.onNewCard}>
+          New card
+        </button>
         <button type="button" className="button button-quiet" onClick={() => fileInput.current?.click()}>
           Import…
         </button>
@@ -94,43 +101,68 @@ export function AgentList(props: Props) {
       <p role="status" className={props.notice?.error ? 'small error-text' : 'faint small'}>
         {props.notice?.text}
       </p>
-      {agents.length === 0 ? (
+      {echoes.length > 0 && (
+        <>
+          <h3 className="list-heading" id={`${inputId}-echoes`}>
+            Echo agents
+          </h3>
+          <ul className="agent-list" aria-labelledby={`${inputId}-echoes`}>
+            {echoes.map((agent) => (
+              <AgentItem key={agent.id} agent={agent} selected={agent.id === selectedId} onSelect={onSelect} onRemove={onRemove} />
+            ))}
+          </ul>
+          <h3 className="list-heading" id={`${inputId}-saved`}>
+            Saved agents
+          </h3>
+        </>
+      )}
+      {saved.length === 0 ? (
         <p className="muted small">No agents yet.</p>
       ) : (
-        <ul className="agent-list">
-          {agents.map((agent) => {
-            const name = agentName(agent);
-            const selected = agent.id === selectedId;
-            return (
-              <li key={agent.id} className={selected ? 'selected' : undefined}>
-                <button
-                  type="button"
-                  className="agent-item"
-                  aria-current={selected ? 'true' : undefined}
-                  onClick={() => onSelect(agent.id)}
-                >
-                  <span className="agent-name">
-                    {name}
-                    {agent.shared && <span className="pill">shared</span>}
-                  </span>
-                  <span className="agent-url">{agent.result?.cardUrl || agent.url || 'Card in the catalog'}</span>
-                  <AgentStatus agent={agent} />
-                </button>
-                {!agent.shared && (
-                  <button type="button" className="icon-button" aria-label={`Remove ${name}`} onClick={() => onRemove(agent.id)}>
-                    ×
-                  </button>
-                )}
-              </li>
-            );
-          })}
+        <ul className="agent-list" aria-labelledby={echoes.length ? `${inputId}-saved` : undefined}>
+          {saved.map((agent) => (
+            <AgentItem key={agent.id} agent={agent} selected={agent.id === selectedId} onSelect={onSelect} onRemove={onRemove} />
+          ))}
         </ul>
       )}
     </nav>
   );
 }
 
+function AgentItem({ agent, selected, onSelect, onRemove }: { agent: AgentEntry; selected: boolean; onSelect: (id: string) => void; onRemove: (id: string) => void }) {
+  const name = agentName(agent);
+  const echo = agent.echo;
+  return (
+    <li className={selected ? 'selected' : undefined}>
+      <button type="button" className="agent-item" aria-current={selected ? 'true' : undefined} onClick={() => onSelect(agent.id)}>
+        <span className="agent-name">
+          {name}
+          {agent.shared && <span className="pill">shared</span>}
+          {unsaved(agent) && <span className="pill">unsaved</span>}
+        </span>
+        <span className="agent-url">
+          {echo ? `${echo.interface.url} · ${echo.interface.protocolBinding} ${echo.interface.protocolVersion}` : agent.result?.cardUrl || agent.url || 'Card in the catalog'}
+        </span>
+        <AgentStatus agent={agent} />
+      </button>
+      {!agent.shared && (
+        <button type="button" className="icon-button" aria-label={`${echo && !echo.exited ? 'Stop' : 'Remove'} ${name}`} onClick={() => onRemove(agent.id)}>
+          ×
+        </button>
+      )}
+    </li>
+  );
+}
+
 function AgentStatus({ agent }: { agent: AgentEntry }) {
+  if (agent.echo?.exited) {
+    return (
+      <span className="status">
+        <span className="dot dot-fail" aria-hidden="true" />
+        Stopped
+      </span>
+    );
+  }
   if (agent.status === 'idle') {
     return (
       <span className="status">

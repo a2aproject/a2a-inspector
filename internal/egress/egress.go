@@ -134,6 +134,11 @@ func (p *Policy) addrAllowed(ip netip.Addr) bool {
 	return false
 }
 
+// Allows reports whether the policy lets the inspector connect to ip.
+func (p *Policy) Allows(ip netip.Addr) bool {
+	return Classify(ip) == "" || p.addrAllowed(ip)
+}
+
 // Resolve returns the addresses of host the policy allows, or a
 // *BlockedError when it allows none of them.
 func (p *Policy) Resolve(ctx context.Context, host string) ([]netip.Addr, error) {

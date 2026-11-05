@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { type AgentEntry, countFindings, describeCounts, type ExtendedCardState, interfacesOf } from '../agents';
+import { type AgentEntry, countFindings, describeCounts, editable, type ExtendedCardState, interfacesOf } from '../agents';
 import type { AgentInterface, CallError, CardResolveResponse } from '../api/types';
 import { safeHref, summarizeCard } from '../card';
 import type { ConnectionSettings as Settings } from '../settings';
@@ -24,12 +24,56 @@ interface Props {
   onFetchCard: () => void;
   onFetchExtendedCard: () => void;
   onShowTraffic: (entryId: string) => void;
+  /** Opens the card in the editor, or a copy of it for a card the user can't change in place. */
+  onEdit: () => void;
+  /** For an echo agent: the agent whose card it serves, if it's in the list. */
+  echoSource?: AgentEntry;
+  onOpenSource: () => void;
+  onStopEcho: () => void;
 }
 
 export function CardView(props: Props) {
+  const { agent } = props;
   return (
     <section className="panel center" aria-label="Agent card">
+      {agent?.echo && <EchoInfo agent={agent} source={props.echoSource} onOpenSource={props.onOpenSource} onStop={props.onStopEcho} />}
       <CardContent {...props} />
+    </section>
+  );
+}
+
+/** What an echo agent is, how it was started, and why it stopped if it did. */
+function EchoInfo({ agent, source, onOpenSource, onStop }: { agent: AgentEntry; source?: AgentEntry; onOpenSource: () => void; onStop: () => void }) {
+  const echo = agent.echo!;
+  return (
+    <section className="card echo-info" aria-labelledby={`${agent.id}-echo`}>
+      <h3 id={`${agent.id}-echo`}>Echo agent</h3>
+      <p>
+        a2a-cli serves the card on <span className="mono break">{echo.interface.url}</span> over {echo.interface.protocolBinding} v{echo.interface.protocolVersion}, and
+        answers every message with the message's text.
+        {source && (
+          <>
+            {' '}
+            It serves{' '}
+            <button type="button" className="link-button" onClick={onOpenSource}>
+              the card from the editor
+            </button>
+            .
+          </>
+        )}
+      </p>
+      <pre className="command">{echo.command}</pre>
+      {echo.exited && (
+        <div role="alert" className="notice notice-error small">
+          <p>The echo agent stopped.</p>
+          <pre>{echo.exited}</pre>
+        </div>
+      )}
+      <p>
+        <button type="button" className="button button-quiet" onClick={onStop}>
+          {echo.exited ? 'Remove' : 'Stop'}
+        </button>
+      </p>
     </section>
   );
 }
@@ -171,6 +215,7 @@ function CardOverview({
   connect,
   onFetchExtendedCard,
   onShowTraffic,
+  onEdit,
 }: Props & { agent: AgentEntry; result: CardResolveResponse; connect: ReactNode }) {
   const payload = result.payload!;
   const card = summarizeCard(payload.raw, payload.protocolVersion);
@@ -201,6 +246,14 @@ function CardOverview({
             </>
           )}
         </p>
+        {/* An echo agent's card has its local interface; the echo agent section links to the card it came from. */}
+        {!agent.echo && (
+          <p>
+            <button type="button" className="button button-quiet" onClick={onEdit}>
+              {editable(agent) ? 'Edit card' : 'Edit a copy'}
+            </button>
+          </p>
+        )}
       </header>
 
       {connect}
