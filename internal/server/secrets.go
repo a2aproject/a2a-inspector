@@ -48,13 +48,16 @@ type secret struct {
 
 // secretStore keeps the secrets of the session in memory.
 type secretStore struct {
-	mu    sync.Mutex
-	next  int
-	items map[string]secret
+	// allowEnv lets secrets refer to the inspector's environment variables.
+	// A shared inspector's environment holds the operator's secrets.
+	allowEnv bool
+	mu       sync.Mutex
+	next     int
+	items    map[string]secret
 }
 
-func newSecretStore() *secretStore {
-	return &secretStore{items: map[string]secret{}}
+func newSecretStore(allowEnv bool) *secretStore {
+	return &secretStore{allowEnv: allowEnv, items: map[string]secret{}}
 }
 
 // store keeps a secret and returns how to show it. A reference returns the
@@ -71,6 +74,9 @@ func (s *secretStore) store(in secretInput) (secretView, error) {
 	}
 	if in.Ref != "" {
 		return s.view(in.Ref)
+	}
+	if in.EnvVar != "" && !s.allowEnv {
+		return secretView{}, errors.New("a shared inspector can't read its environment variables; enter the value instead")
 	}
 	sec := secret{envVar: in.EnvVar}
 	if in.Value != nil {

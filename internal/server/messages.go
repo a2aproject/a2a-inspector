@@ -35,8 +35,12 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// sendTimeout bounds a non-streaming call; streams last until the UI stops them.
+// sendTimeout bounds a non-streaming call; streams last until the UI stops
+// them, or Limits.StreamDuration.
 const sendTimeout = 5 * time.Minute
+
+// errStreamLimit ends streams that reach Limits.StreamDuration.
+var errStreamLimit = errors.New("stream duration limit")
 
 // Payload kinds the server reads itself instead of with validate.Payload.
 const (
@@ -131,13 +135,14 @@ func (s *Server) buildSend(conn *connection, req sendRequest) (*a2a.SendMessageR
 }
 
 // prepareSend decodes and builds a send request, or writes an error response.
-func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall, bool) {
-	conn, ok := s.connection(w, r)
-	if !ok {
-		return nil, false
-	}
+func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request, conn *connection) (*sendCall, bool) {
+	sess := sessionOf(r)
 	var req sendRequest
 	if !decodeRequest(w, r, &req) {
+		return nil, false
+	}
+	if req.Options.PushNotifications && !s.webhooks() {
+		writeError(w, http.StatusBadRequest, errNoWebhooks)
 		return nil, false
 	}
 	sendReq, raw, err := s.buildSend(conn, req)
@@ -145,19 +150,20 @@ func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall,
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, false
 	}
-	_, secrets, err := conn.params()
+	tc, err := conn.call()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, false
 	}
-	sc := &sendCall{conn: conn, req: sendReq, tc: &traffic.Call{ConnectionID: conn.view.ID, Secrets: secrets, MessageOverride: raw}}
+	tc.MessageOverride = raw
+	sc := &sendCall{conn: conn, req: sendReq, tc: tc}
 	if req.Options.PushNotifications {
 		base := s.webhookBaseURL()
-		if view, ok := s.hooks.forTask(conn.view.ID, string(sendReq.Message.TaskID), base); ok {
+		if view, ok := sess.hooks.forTask(conn.view.ID, string(sendReq.Message.TaskID), base); ok {
 			// A second config would make the agent notify twice.
 			sc.webhook = &view
 		} else {
-			wh, view := s.hooks.create(conn, "", base)
+			wh, view := sess.hooks.create(conn, "", base)
 			if sendReq.Config == nil {
 				sendReq.Config = &a2a.SendMessageConfig{}
 			}
@@ -171,26 +177,27 @@ func (s *Server) prepareSend(w http.ResponseWriter, r *http.Request) (*sendCall,
 	return sc, true
 }
 
-func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
-	sc, ok := s.prepareSend(w, r)
+func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, conn *connection) {
+	sess := sessionOf(r)
+	sc, ok := s.prepareSend(w, r, conn)
 	if !ok {
 		return
 	}
-	callCtx, stop := s.callContext(r)
+	callCtx, stop := s.callContext(r, conn)
 	defer stop()
 	ctx, cancel := context.WithTimeout(callCtx, sendTimeout)
 	defer cancel()
 	start := time.Now()
 	decoded, err := sc.conn.client.SendMessage(traffic.WithCall(ctx, sc.tc), sc.req)
-	res := s.unaryResult(sc.conn, sc.tc, start, validate.SendMessageResponse, decoded, err)
+	res := s.unaryResult(sess, sc.conn, sc.tc, start, validate.SendMessageResponse, decoded, err)
 	sc.conn.settle(&res, true)
-	s.hooks.bind(sc.webhook, res)
-	res.Webhook = s.dropWebhook(ctx, sc.webhook, res)
+	sess.hooks.bind(sc.webhook, res)
+	res.Webhook = sess.hooks.drop(ctx, sc.webhook, res)
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	sc, ok := s.prepareSend(w, r)
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, conn *connection) {
+	sc, ok := s.prepareSend(w, r, conn)
 	if !ok {
 		return
 	}
@@ -218,14 +225,29 @@ type streamCall struct {
 	run     func(ctx context.Context) iter.Seq2[a2a.Event, error]
 }
 
+// openStream counts a stream against the session's limit, or answers 429.
+// The caller calls closeStream when the stream ends.
+func (s *Server) openStream(w http.ResponseWriter, sess *session) bool {
+	if !sess.openStream(s.opts.Limits.Streams) {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("This session already has %d streams open. Stop one first.", s.opts.Limits.Streams))
+		return false
+	}
+	return true
+}
+
 // streamEvents answers with the events of a streaming call as server-sent
 // events, one agentResult each, read from the wire as they arrive.
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamCall) {
+	sess := sessionOf(r)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming isn't supported by this server.")
 		return
 	}
+	if !s.openStream(w, sess) {
+		return
+	}
+	defer sess.closeStream()
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("X-Accel-Buffering", "no")
@@ -235,8 +257,13 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	conn, tc := sc.conn, sc.tc
 	binding, version := conn.binding()
 	opFindings := s.operationFindings(conn, sc.op)
-	ctx, stop := s.callContext(r)
+	ctx, stop := s.callContext(r, conn)
 	defer stop()
+	if d := s.opts.Limits.StreamDuration; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, d, errStreamLimit)
+		defer cancel()
+	}
 	var mu sync.Mutex
 	emitted, failed := 0, false
 	emit := func(res agentResult) {
@@ -245,10 +272,10 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 		if emitted == 0 {
 			res.Call.Findings = append(opFindings, res.Call.Findings...)
 			// A rejection as the first result ends the stream.
-			res.Webhook = s.dropWebhook(ctx, sc.webhook, res)
+			res.Webhook = sess.hooks.drop(ctx, sc.webhook, res)
 		}
 		conn.settle(&res, sc.own)
-		s.hooks.bind(sc.webhook, res)
+		sess.hooks.bind(sc.webhook, res)
 		emitted++
 		failed = failed || res.Call.Error != nil
 		data, _ := json.Marshal(res)
@@ -261,7 +288,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	tc.OnFrame = func(entryID string, f traffic.Frame) {
 		id, ok := requestIDs[entryID]
 		if !ok {
-			if e, found := s.traffic.Get(entryID); found && e.HTTP != nil {
+			if e, found := sess.traffic.Get(entryID); found && e.HTTP != nil {
 				id = jsonrpcRequestID(e.HTTP.RequestBody)
 			}
 			requestIDs[entryID] = id
@@ -289,6 +316,14 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 			emit(s.decodedResult(start, binding, validate.StreamResponse, a2a.StreamResponse{Event: event}))
 		}
 	}
+	if context.Cause(ctx) == errStreamLimit {
+		emit(agentResult{Call: call{
+			TrafficEntryID: tc.LastEntryID(),
+			LatencyMs:      time.Since(start).Milliseconds(),
+			Error:          &callError{Message: fmt.Sprintf("The inspector ended the stream after %s, its limit for streams.", s.opts.Limits.StreamDuration)},
+		}})
+		return
+	}
 	if ctx.Err() != nil {
 		return
 	}
@@ -300,9 +335,9 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	}
 	// The agent answered without a stream, the stream failed, or it ended
 	// without events.
-	entry, ok := s.traffic.Get(tc.LastEntryID())
+	entry, ok := sess.traffic.Get(tc.LastEntryID())
 	if ok && (entry.GRPC != nil || (entry.HTTP != nil && !traffic.IsEventStream(headerValue(entry.HTTP.ResponseHeaders, "Content-Type")))) {
-		emit(s.unaryResult(conn, tc, start, validate.StreamResponse, nil, streamErr))
+		emit(s.unaryResult(sess, conn, tc, start, validate.StreamResponse, nil, streamErr))
 		return
 	}
 	res := agentResult{Call: call{TrafficEntryID: tc.LastEntryID(), LatencyMs: time.Since(start).Milliseconds()}}
@@ -338,10 +373,10 @@ func (s *Server) operationFindings(conn *connection, op validate.Operation) []va
 // unaryResult builds the result of a call from its last traffic entry: the
 // payload as received, or the error the agent or network gave. decoded is
 // what a2a-go made of the response, used when there's no traffic entry.
-func (s *Server) unaryResult(conn *connection, tc *traffic.Call, start time.Time, kind validate.PayloadKind, decoded any, err error) agentResult {
+func (s *Server) unaryResult(sess *session, conn *connection, tc *traffic.Call, start time.Time, kind validate.PayloadKind, decoded any, err error) agentResult {
 	binding, version := conn.binding()
 	res := agentResult{Call: call{TrafficEntryID: tc.LastEntryID(), LatencyMs: time.Since(start).Milliseconds()}}
-	entry, ok := s.traffic.Get(res.Call.TrafficEntryID)
+	entry, ok := sess.traffic.Get(res.Call.TrafficEntryID)
 	switch {
 	case !ok && err != nil:
 		// a2a-go failed before sending, or on a transport the inspector

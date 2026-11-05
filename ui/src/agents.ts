@@ -1,6 +1,6 @@
 import type { PushConfigView } from './a2a/view';
-import type { AgentInterface, AgentResult, CardResolveResponse, Connection, Finding, ListTasksQuery, OpenTask, Preferences } from './api/types';
-import { type ConnectionSettings, defaultSettings, preferredInterface } from './settings';
+import type { AgentInterface, AgentResult, CardResolveResponse, Connection, Conversation, Finding, ListTasksQuery, OpenTask, Preferences } from './api/types';
+import { type ConnectionSettings, defaultSettings, preferredInterface, settingsAfterSessionLoss } from './settings';
 
 /** One line of the chat with an agent. */
 export type ChatItem =
@@ -61,6 +61,8 @@ export interface AgentEntry {
   connection?: Connection;
   /** The interface and settings the connection was made with. */
   connectionKey?: string;
+  /** The conversation of a connection the backend lost with its session, for the next one to continue. */
+  resume?: Conversation;
   chat: ChatItem[];
   /** A message is on its way. */
   busy: boolean;
@@ -109,6 +111,8 @@ export type AgentsAction =
   | { type: 'settings'; id: string; settings: ConnectionSettings }
   | { type: 'connected'; id: string; connection: Connection; key: string; settings: ConnectionSettings }
   | { type: 'disconnected'; id: string }
+  /** The backend replaced the session: every connection, and the secrets stored with it, are gone. */
+  | { type: 'sessionReset' }
   | { type: 'chat'; id: string; item: ChatItem }
   | { type: 'busy'; id: string; busy: boolean }
   /**
@@ -286,12 +290,15 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
           connection: action.connection,
           connectionKey: action.key,
           settings: action.settings,
+          resume: undefined,
           connectionIds: [...entry.connectionIds, action.connection.id],
         }),
       };
     }
     case 'disconnected':
       return { ...state, agents: patch(state.agents, action.id, { connection: undefined, connectionKey: undefined }) };
+    case 'sessionReset':
+      return { ...state, agents: state.agents.map(afterSessionLoss) };
     case 'chat': {
       const entry = state.agents.find((a) => a.id === action.id);
       if (!entry) return state;
@@ -362,6 +369,17 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
     case 'extendedCard':
       return { ...state, agents: patch(state.agents, action.id, { extendedCard: action.value }) };
   }
+}
+
+/** The agent without its connection, keeping the conversation for the next one. */
+export function withoutConnection(a: AgentEntry): AgentEntry {
+  const resume = a.connection ? { contextId: a.connection.contextId, openTask: a.connection.openTask } : a.resume;
+  return { ...a, connection: undefined, connectionKey: undefined, resume };
+}
+
+/** The agent after the backend lost its session, with its connection and the secrets stored in the session. */
+export function afterSessionLoss(a: AgentEntry): AgentEntry {
+  return { ...withoutConnection(a), settings: settingsAfterSessionLoss(a.settings) };
 }
 
 export function agentName(agent: AgentEntry): string {

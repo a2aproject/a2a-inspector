@@ -107,14 +107,14 @@ func TestHookReceiver(t *testing.T) {
 	s := newServer(t, Options{})
 	conn := s.connect(t, `{"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"1.0"},"contextId":"ctx-1"}`)
 	c := mustConnection(t, s, conn.ID)
-	wh, view := s.hooks.create(c, "t-1", s.webhookBaseURL())
+	wh, view := s.local.hooks.create(c, "t-1", s.webhookBaseURL())
 	if view.URL != "http://127.0.0.1:8080/hooks/"+wh.id {
 		t.Errorf("webhook URL = %q", view.URL)
 	}
 	path := "/hooks/" + wh.id
 	last := func() *notification {
 		t.Helper()
-		snapshot, _, cancel := s.hooks.subscribe(func(*notification) bool { return true })
+		snapshot, _, cancel := s.local.hooks.subscribe(func(*notification) bool { return true })
 		cancel()
 		if len(snapshot) == 0 {
 			t.Fatal("no notification")
@@ -226,7 +226,7 @@ func TestHookReceiver(t *testing.T) {
 func TestHookSecurity(t *testing.T) {
 	s := newServer(t, Options{})
 	conn := s.connect(t, `{"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"0.3"}}`)
-	wh, _ := s.hooks.create(mustConnection(t, s, conn.ID), "", s.webhookBaseURL())
+	wh, _ := s.local.hooks.create(mustConnection(t, s, conn.ID), "", s.webhookBaseURL())
 	cross := map[string]string{"Origin": "http://evil.example", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json"}
 	if w := s.do(request{method: http.MethodPost, target: "/hooks/" + wh.id, body: `{}`, host: "evil.example", headers: cross}); w.Code != http.StatusOK {
 		t.Errorf("foreign Host, Origin and no cookie on /hooks/: %d, want 200", w.Code)
@@ -250,13 +250,13 @@ func TestWebhookFollowsReplacement(t *testing.T) {
 	s := newServer(t, Options{})
 	const iface = `"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"1.0"},"contextId":"ctx-1"`
 	old := s.connect(t, `{`+iface+`}`)
-	wh, _ := s.hooks.create(mustConnection(t, s, old.ID), "t-1", s.webhookBaseURL())
+	wh, _ := s.local.hooks.create(mustConnection(t, s, old.ID), "t-1", s.webhookBaseURL())
 	// A settings change replaces the connection; the agent still notifies the old webhook.
 	s.do(request{method: http.MethodDelete, target: "/api/connections/" + old.ID, cookie: true})
 	replacement := s.connect(t, `{`+iface+`,"replaces":"`+old.ID+`"}`)
 	s.deliver("/hooks/"+wh.id, inputRequiredTask, map[string]string{"A2A-Notification-Token": wh.token})
 
-	snapshot, _, cancel := s.hooks.subscribe(func(*notification) bool { return true })
+	snapshot, _, cancel := s.local.hooks.subscribe(func(*notification) bool { return true })
 	cancel()
 	if n := snapshot[len(snapshot)-1]; n.ConnectionID != replacement.ID || n.Conversation == nil || n.Conversation.OpenTask == nil {
 		t.Errorf("notification = %+v", n)
@@ -271,12 +271,12 @@ func TestWebhookForTask(t *testing.T) {
 	const iface = `{"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"1.0"}}`
 	conn, other := s.connect(t, iface), s.connect(t, iface)
 	base := s.webhookBaseURL()
-	_, view := s.hooks.create(mustConnection(t, s, conn.ID), "", base)
-	if _, ok := s.hooks.forTask(conn.ID, "t-1", base); ok {
+	_, view := s.local.hooks.create(mustConnection(t, s, conn.ID), "", base)
+	if _, ok := s.local.hooks.forTask(conn.ID, "t-1", base); ok {
 		t.Fatal("a webhook created with a message stands for a task before the answer")
 	}
-	s.hooks.bind(&view, agentResult{Payload: &agentPayload{Raw: json.RawMessage(`{"task":` + inputRequiredTask + `}`)}})
-	if got, ok := s.hooks.forTask(conn.ID, "t-1", base); !ok || got.ID != view.ID || got.URL != view.URL || !got.Existing {
+	s.local.hooks.bind(&view, agentResult{Payload: &agentPayload{Raw: json.RawMessage(`{"task":` + inputRequiredTask + `}`)}})
+	if got, ok := s.local.hooks.forTask(conn.ID, "t-1", base); !ok || got.ID != view.ID || got.URL != view.URL || !got.Existing {
 		t.Errorf("forTask = %+v, %v, want %+v", got, ok, view)
 	}
 	for name, args := range map[string][3]string{
@@ -284,12 +284,12 @@ func TestWebhookForTask(t *testing.T) {
 		"no task":          {conn.ID, "", base},
 		"other base URL":   {conn.ID, "t-1", "https://tunnel.example.com"},
 	} {
-		if _, ok := s.hooks.forTask(args[0], args[1], args[2]); ok {
+		if _, ok := s.local.hooks.forTask(args[0], args[1], args[2]); ok {
 			t.Errorf("%s: found a webhook", name)
 		}
 	}
-	s.hooks.configDeleted(conn.ID, "t-1")
-	if _, ok := s.hooks.forTask(conn.ID, "t-1", base); ok {
+	s.local.hooks.configDeleted(conn.ID, "t-1")
+	if _, ok := s.local.hooks.forTask(conn.ID, "t-1", base); ok {
 		t.Error("found a webhook after a config of the task was deleted")
 	}
 	// It still receives, to show whether the agent ignored the delete.
@@ -321,7 +321,7 @@ func TestWebhookOfFailedCall(t *testing.T) {
 		{"unreadable answer", jsonrpcAgent(t, "application/json", `not json`).URL, true},
 	} {
 		connID := connect(tc.url)
-		before := s.hooks.count()
+		before := s.local.hooks.count()
 		results := map[string]agentResult{
 			"send":   s.send(t, connID, push),
 			"stream": s.stream(t, connID, push)[0],
@@ -336,24 +336,24 @@ func TestWebhookOfFailedCall(t *testing.T) {
 		if tc.kept {
 			want += len(results)
 		}
-		if got := s.hooks.count(); got != want {
+		if got := s.local.hooks.count(); got != want {
 			t.Errorf("%s: %d webhooks, want %d", tc.name, got, want)
 		}
 	}
 	// An error as the first event of a stream.
-	before := s.hooks.count()
-	if res := s.stream(t, connect(jsonrpcAgent(t, "text/event-stream", "data: "+rpcError+"\n\n").URL), push)[0]; res.Call.Error == nil || res.Webhook != nil || s.hooks.count() != before {
-		t.Errorf("error event: error %+v, webhook %+v, %d webhooks, want %d", res.Call.Error, res.Webhook, s.hooks.count(), before)
+	before := s.local.hooks.count()
+	if res := s.stream(t, connect(jsonrpcAgent(t, "text/event-stream", "data: "+rpcError+"\n\n").URL), push)[0]; res.Call.Error == nil || res.Webhook != nil || s.local.hooks.count() != before {
+		t.Errorf("error event: error %+v, webhook %+v, %d webhooks, want %d", res.Call.Error, res.Webhook, s.local.hooks.count(), before)
 	}
 
 	// A failed follow-up leaves the webhook the task already notifies.
 	rejecting := jsonrpcAgent(t, "application/json", rpcError)
 	conn := s.connect(t, `{"interface":{"url":"`+rejecting.URL+`","protocolBinding":"JSONRPC","protocolVersion":"1.0"},"contextId":"ctx-1","openTask":{"id":"t-1","state":"input-required"}}`)
-	_, view := s.hooks.create(mustConnection(t, s, conn.ID), "t-1", s.webhookBaseURL())
+	_, view := s.local.hooks.create(mustConnection(t, s, conn.ID), "t-1", s.webhookBaseURL())
 	if res := s.send(t, conn.ID, push); res.Webhook == nil || res.Webhook.ID != view.ID || !res.Webhook.Existing {
 		t.Errorf("webhook = %+v, want the existing %+v", res.Webhook, view)
 	}
-	if _, ok := s.hooks.webhook(view.ID); !ok {
+	if _, ok := s.local.hooks.webhook(view.ID); !ok {
 		t.Error("the failed follow-up removed the task's webhook")
 	}
 }
@@ -365,8 +365,8 @@ func TestHooksFeed(t *testing.T) {
 	defer s.Close()
 	conn := s.connect(t, `{"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"1.0"},"contextId":"ctx-a"}`)
 	other := s.connect(t, `{"interface":{"url":"http://127.0.0.1:1","protocolBinding":"JSONRPC","protocolVersion":"1.0"}}`)
-	wh1, _ := s.hooks.create(mustConnection(t, s, conn.ID), "t-1", s.webhookBaseURL())
-	wh2, _ := s.hooks.create(mustConnection(t, s, other.ID), "t-2", s.webhookBaseURL())
+	wh1, _ := s.local.hooks.create(mustConnection(t, s, conn.ID), "t-1", s.webhookBaseURL())
+	wh2, _ := s.local.hooks.create(mustConnection(t, s, other.ID), "t-2", s.webhookBaseURL())
 	s.deliver("/hooks/"+wh1.id, `{"task":{"id":"t-1","contextId":"c","status":{"state":"TASK_STATE_WORKING"}}}`, nil)
 
 	all := follow(t, s, inspector.URL+"/api/hooks")

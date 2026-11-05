@@ -26,6 +26,10 @@ type Call struct {
 	ConnectionID string
 	// Secrets are values masked wherever they appear in headers or metadata.
 	Secrets []string
+	// Headers are the names of the headers the user configured for the
+	// call, such as credentials, which mustn't follow a redirect to another
+	// origin.
+	Headers []string
 	// MessageOverride, if set, replaces the message of the call's request:
 	// byte for byte for HTTP bindings, parsed as proto3 JSON for gRPC. A call
 	// makes one A2A request, so every POST of it is that request, also when

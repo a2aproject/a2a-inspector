@@ -15,12 +15,38 @@ import type {
 /** An error from the inspector's API itself, not from an agent. */
 export class ApiError extends Error {
   readonly status: number;
+  /** Names errors the UI acts on, such as "sessionRenewed". */
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/**
+ * Whether a shared inspector answered with a new session because the old one ended: its
+ * connections and the credentials entered in it are gone. Repeating the request uses the new one.
+ */
+export function isSessionRenewed(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401 && err.code === 'sessionRenewed';
+}
+
+/** Whether the inspector no longer has the connection, for example because it made room for a newer one. */
+export function isUnknownConnection(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && err.code === 'unknownConnection';
+}
+
+let renewedListener: (() => void) | undefined;
+
+/** Calls listener whenever the inspector renews the session. Returns a function that stops it. */
+export function onSessionRenewed(listener: () => void): () => void {
+  renewedListener = listener;
+  return () => {
+    if (renewedListener === listener) renewedListener = undefined;
+  };
 }
 
 function headersFor(init: RequestInit, accept: string): Headers {
@@ -33,13 +59,15 @@ function headersFor(init: RequestInit, accept: string): Headers {
 }
 
 async function apiError(resp: Response): Promise<ApiError> {
-  let message: string | undefined;
+  let body: { message?: string; code?: string } | undefined;
   try {
-    message = ((await resp.json()) as { error?: { message?: string } } | undefined)?.error?.message;
+    body = ((await resp.json()) as { error?: { message?: string; code?: string } } | undefined)?.error;
   } catch {
     // Not a JSON error body.
   }
-  return new ApiError(message ?? `${resp.status} ${resp.statusText}`, resp.status);
+  const err = new ApiError(body?.message ?? `${resp.status} ${resp.statusText}`, resp.status, body?.code);
+  if (isSessionRenewed(err)) renewedListener?.();
+  return err;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

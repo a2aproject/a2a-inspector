@@ -296,7 +296,7 @@ func TestAgentMatrix(t *testing.T) {
 				t.Errorf("last event = %s, want the completed status", last)
 			}
 
-			webhooks := s.hooks.count()
+			webhooks := s.local.hooks.count()
 			failed := s.send(t, conn.ID, `{"compose":{"text":"fail"},"options":{"pushNotifications":true}}`)
 			if failed.Call.Error == nil || failed.Payload != nil {
 				t.Fatalf("result = %+v, want an error", failed)
@@ -305,8 +305,8 @@ func TestAgentMatrix(t *testing.T) {
 				t.Errorf("error = %+v, want UnsupportedOperationError", failed.Call.Error)
 			}
 			// The agent rejected the message, so the webhook created for it is gone.
-			if failed.Webhook != nil || s.hooks.count() != webhooks {
-				t.Errorf("webhook = %+v, %d webhooks, want %d", failed.Webhook, s.hooks.count(), webhooks)
+			if failed.Webhook != nil || s.local.hooks.count() != webhooks {
+				t.Errorf("webhook = %+v, %d webhooks, want %d", failed.Webhook, s.local.hooks.count(), webhooks)
 			}
 
 			// A new connection, as after changing the settings, can continue the conversation.
@@ -321,7 +321,7 @@ func TestAgentMatrix(t *testing.T) {
 				t.Errorf("payload = %s, want the echo of the raw message", raw.Payload.Raw)
 			}
 
-			entry, ok := s.traffic.Get(raw.Call.TrafficEntryID)
+			entry, ok := s.local.traffic.Get(raw.Call.TrafficEntryID)
 			if !ok {
 				t.Fatal("the traffic entry is gone")
 			}

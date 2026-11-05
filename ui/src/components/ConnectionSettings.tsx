@@ -9,12 +9,14 @@ interface Props {
   connection?: Connection;
   /** Whether the next message reconnects because the interface or settings changed. */
   stale: boolean;
+  /** Whether secrets can come from the inspector's environment variables; a shared inspector says no. */
+  envSecrets: boolean;
 }
 
 const authLabels: Record<AuthType, string> = { none: 'None', bearer: 'Bearer token', basic: 'Basic', apiKey: 'API key' };
 
 /** Auth, headers, extensions and tenant for the calls to the agent. Secrets never come back from the backend. */
-export function ConnectionSettings({ settings, onChange, connection, stale }: Props) {
+export function ConnectionSettings({ settings, onChange, connection, stale, envSecrets }: Props) {
   const id = useId();
   const set = (change: Partial<Settings>) => onChange({ ...settings, ...change });
   const secret = settings.secret;
@@ -72,7 +74,7 @@ export function ConnectionSettings({ settings, onChange, connection, stale }: Pr
               onChange={(e) => set({ secret: { source: e.target.value as 'value' | 'env', value: '' } })}
             >
               <option value="value">Value, kept in the inspector's memory</option>
-              <option value="env">Environment variable of the inspector</option>
+              {(envSecrets || secret.source === 'env') && <option value="env">Environment variable of the inspector</option>}
             </select>
             <label htmlFor={`${id}-secret`}>{secret.source === 'env' ? 'Variable' : 'Value'}</label>
             <input
@@ -80,7 +82,9 @@ export function ConnectionSettings({ settings, onChange, connection, stale }: Pr
               type={secret.source === 'env' ? 'text' : 'password'}
               autoComplete="off"
               spellCheck={false}
-              placeholder={secret.masked && secret.source === 'value' ? `Stored: ${secret.masked}` : secret.source === 'env' ? 'AGENT_TOKEN' : ''}
+              placeholder={
+                secret.lost ? 'Enter it again' : secret.masked && secret.source === 'value' ? `Stored: ${secret.masked}` : secret.source === 'env' ? 'AGENT_TOKEN' : ''
+              }
               value={secret.value}
               onChange={(e) => set({ secret: { ...secret, value: e.target.value } })}
             />
@@ -106,7 +110,7 @@ export function ConnectionSettings({ settings, onChange, connection, stale }: Pr
               <input
                 type={h.secret ? 'password' : 'text'}
                 aria-label={`Header ${i + 1} value`}
-                placeholder={h.masked ? `Stored: ${h.masked}` : 'Value'}
+                placeholder={h.lost ? 'Enter it again' : h.masked ? `Stored: ${h.masked}` : 'Value'}
                 autoComplete="off"
                 spellCheck={false}
                 value={h.value}

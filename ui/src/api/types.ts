@@ -120,11 +120,15 @@ export interface Startup {
 }
 
 export interface Config {
+  /** "hosted" for a shared inspector, where every browser has its own session. */
   mode: 'local' | 'hosted';
+  /** How long a hosted session lives without an open tab or a request. */
+  idleTimeoutSeconds?: number;
   /** The agent given with --agent-card. */
   agentCardUrl?: string;
   startup?: Startup;
-  features: { serve: boolean; webhooks: boolean };
+  /** envSecrets: secrets can refer to the inspector's environment variables. */
+  features: { serve: boolean; webhooks: boolean; envSecrets: boolean };
   /** Protocol bindings the inspector supports. */
   bindings?: string[];
   /** Where agents send push notifications to the inspector, for this run. */

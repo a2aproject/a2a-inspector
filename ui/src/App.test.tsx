@@ -62,7 +62,7 @@ const addAgentButton = () => within(screen.getByRole('navigation', { name: 'Agen
 
 const config: Config = {
   mode: 'local',
-  features: { serve: false, webhooks: true },
+  features: { serve: false, webhooks: true, envSecrets: true },
   webhookBaseUrl: 'http://127.0.0.1:8080',
   defaultWebhookBaseUrl: 'http://127.0.0.1:8080',
 };
@@ -406,6 +406,99 @@ describe('App', () => {
         replaces: 'conn-1',
       });
       expect(fetch.mock.calls.some(([u, init]) => u === '/api/connections/conn-1' && init?.method === 'DELETE')).toBe(true);
+    });
+
+    describe('on a shared inspector', () => {
+      const hosted: Config = { mode: 'hosted', idleTimeoutSeconds: 600, features: { serve: false, webhooks: false, envSecrets: false } };
+      const renewedError = () => json({ error: { message: 'Your session ended.', code: 'sessionRenewed' } }, 401);
+
+      async function openHosted(routes: Record<string, Route>) {
+        const fetch = mockApi({
+          '/api/config': () => json({ ...hosted, agentCardUrl: 'http://localhost:9999/.well-known/agent-card.json' }),
+          '/api/card:resolve': () => json(resolved),
+          ...routes,
+        });
+        const user = userEvent.setup();
+        render(<App />);
+        await screen.findByRole('heading', { name: 'Echo Agent' });
+        return { fetch, user };
+      }
+
+      it('says it is shared and offers no environment-variable secrets', async () => {
+        const { user } = await openHosted({});
+        expect(screen.getByRole('note')).toHaveTextContent('Shared instance');
+        expect(screen.getByRole('note')).toHaveTextContent('dropped after 10 minutes without an open tab');
+        await user.selectOptions(screen.getByLabelText('Auth'), 'bearer');
+        expect(within(screen.getByLabelText('Secret from')).getAllByRole('option')).toHaveLength(1);
+      });
+
+      it('connects again, continuing the conversation, after the inspector renewed the session', async () => {
+        let n = 0;
+        let sends = 0;
+        const { fetch, user } = await openHosted({
+          '/api/connections': () => json({ ...connection, id: `conn-${++n}` }, 201),
+          '/api/connections/conn-1/messages:send': () => (++sends === 1 ? json(result(task('TASK_STATE_COMPLETED', 'first'))) : renewedError()),
+          '/api/connections/conn-2/messages:send': () => json(result(task('TASK_STATE_COMPLETED', 'second'))),
+        });
+        await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'one{Enter}');
+        const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+        await transcript.findByText('first');
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'two{Enter}');
+
+        expect(await transcript.findByText('second')).toBeInTheDocument();
+        expect(screen.getByText(/Your session ended, so the inspector started a new one/)).toBeInTheDocument();
+        expect(body(fetch, '/api/connections', 1)).toMatchObject({ contextId: 'ctx-1' });
+        expect(body(fetch, '/api/connections', 1).replaces).toBeUndefined();
+      });
+
+      it('connects again when the inspector dropped the connection for a newer one', async () => {
+        let n = 0;
+        let sends = 0;
+        const { fetch, user } = await openHosted({
+          '/api/connections': () => json({ ...connection, id: `conn-${++n}` }, 201),
+          '/api/connections/conn-1/messages:send': () =>
+            ++sends === 1
+              ? json(result(task('TASK_STATE_COMPLETED', 'first')))
+              : json({ error: { message: 'Unknown connection. Connect to the agent again.', code: 'unknownConnection' } }, 404),
+          '/api/connections/conn-2/messages:send': () => json(result(task('TASK_STATE_COMPLETED', 'second'))),
+        });
+        await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'one{Enter}');
+        const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+        await transcript.findByText('first');
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'two{Enter}');
+
+        expect(await transcript.findByText('second')).toBeInTheDocument();
+        expect(body(fetch, '/api/connections', 1)).toMatchObject({ contextId: 'ctx-1' });
+        expect(screen.queryByText(/Your session ended/)).not.toBeInTheDocument();
+      });
+
+      it('asks for credentials again after the inspector renewed the session', async () => {
+        let n = 0;
+        let sends = 0;
+        const { fetch, user } = await openHosted({
+          '/api/connections': () => json({ ...connection, id: `conn-${++n}`, auth: { type: 'bearer', secret: { ref: `sec-${n}`, masked: '••••6789' } } }, 201),
+          '/api/connections/conn-1/messages:send': () => (++sends === 1 ? json(result(task('TASK_STATE_COMPLETED', 'first'))) : renewedError()),
+          '/api/connections/conn-2/messages:send': () => json(result(task('TASK_STATE_COMPLETED', 'second'))),
+        });
+        await user.selectOptions(screen.getByLabelText('Auth'), 'bearer');
+        await user.type(screen.getByLabelText('Value'), 'token-0123456789');
+        await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'one{Enter}');
+        const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+        await transcript.findByText('first');
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'two{Enter}');
+
+        expect(await transcript.findByText(/Enter them again in the connection settings/)).toBeInTheDocument();
+        expect(screen.getByLabelText('Value')).toHaveAttribute('placeholder', 'Enter it again');
+        expect(fetch.mock.calls.filter(([u]) => u === '/api/connections')).toHaveLength(1);
+
+        await user.type(screen.getByLabelText('Value'), 'token-0123456789');
+        await user.type(screen.getByRole('textbox', { name: 'Message' }), 'three{Enter}');
+        expect(await transcript.findByText('second')).toBeInTheDocument();
+        expect(body(fetch, '/api/connections', 1)).toMatchObject({ auth: { bearer: { value: 'token-0123456789' } }, contextId: 'ctx-1' });
+      });
     });
 
     it('opens the endpoint given on the command line and adds interfaces by hand', async () => {

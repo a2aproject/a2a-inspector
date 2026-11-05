@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -26,10 +27,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-inspector/internal/agents"
+	"github.com/a2aproject/a2a-inspector/internal/traffic"
 	"github.com/a2aproject/a2a-inspector/internal/validate"
 )
 
@@ -128,10 +131,21 @@ type connection struct {
 	client  *a2aclient.Client
 	// params resolves the service parameters and the secret values among them.
 	params func() (a2aclient.ServiceParams, []string, error)
+	// ctx ends when the connection is removed or its session ends, and ends
+	// the calls on it.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	contextID string
 	openTask  *taskState
+}
+
+func (c *connection) stop() { c.cancel() }
+
+func (c *connection) destroy() {
+	c.cancel()
+	_ = c.client.Destroy()
 }
 
 func (c *connection) response() connectionResponse {
@@ -191,41 +205,48 @@ func (c *connection) binding() (string, string) {
 	return c.view.Interface.ProtocolBinding, c.view.Interface.ProtocolVersion
 }
 
+// call returns the traffic.Call for a call on the connection, with the
+// secrets to mask and the headers that don't follow redirects to another origin.
+func (c *connection) call() (*traffic.Call, error) {
+	params, secrets, err := c.params()
+	if err != nil {
+		return nil, err
+	}
+	return &traffic.Call{ConnectionID: c.view.ID, Secrets: secrets, Headers: slices.Collect(maps.Keys(params))}, nil
+}
+
+// connections are the connections of a session. Handlers acquire a
+// connection for as long as they use it.
 type connections struct {
-	mu    sync.Mutex
-	next  int
-	items map[string]*connection
+	*pool[*connection]
+	// max is how many connections to keep; 0 means no limit.
+	max  int
+	next atomic.Int64
 }
 
-func (cs *connections) add(c *connection) string {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	cs.next++
-	id := "conn-" + strconv.Itoa(cs.next)
-	c.view.ID = id
-	cs.items[id] = c
-	return id
+var (
+	errTooManyConnections = errors.New("too many connections busy with calls in this session; stop a stream or remove an agent first")
+	errSessionEnded       = errors.New("the session ended; try again")
+)
+
+func newConnections(max int) *connections {
+	return &connections{pool: newPool[*connection](), max: max}
 }
 
-func (cs *connections) get(id string) (*connection, bool) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	c, ok := cs.items[id]
-	return c, ok
-}
-
-func (cs *connections) all() []*connection {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	return slices.Collect(maps.Values(cs.items))
-}
-
-func (cs *connections) remove(id string) (*connection, bool) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	c, ok := cs.items[id]
-	delete(cs.items, id)
-	return c, ok
+// add keeps a connection and gives it an ID. At the limit, it replaces the
+// connection used the longest ago that nobody uses. It fails when every
+// connection is in use, or the session ended.
+func (cs *connections) add(c *connection) error {
+	c.view.ID = "conn-" + strconv.FormatInt(cs.next.Add(1), 10)
+	release, _, err := cs.pool.add(c.view.ID, c, poolLimit[*connection]{max: cs.max, err: errTooManyConnections})
+	if errors.Is(err, errPoolClosed) {
+		return errSessionEnded
+	}
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
 }
 
 // paramSource is one resolved header: a fixed value, or a secret formatted
@@ -240,13 +261,13 @@ type paramSource struct {
 // resolveParams turns the auth preset, headers, extensions and service
 // parameters of a request into the connection's params function and the
 // views the UI gets back.
-func (s *Server) resolveParams(auth *authInput, headers []headerInput, extensions []string, svcParams map[string]string) (func() (a2aclient.ServiceParams, []string, error), *authView, []headerView, error) {
+func resolveParams(sess *session, auth *authInput, headers []headerInput, extensions []string, svcParams map[string]string) (func() (a2aclient.ServiceParams, []string, error), *authView, []headerView, error) {
 	var sources []paramSource
 	var av *authView
 	if auth != nil {
 		var err error
 		var src paramSource
-		src, av, err = s.resolveAuth(auth)
+		src, av, err = resolveAuth(sess, auth)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -265,7 +286,7 @@ func (s *Server) resolveParams(auth *authInput, headers []headerInput, extension
 			views = append(views, headerView{Name: name, Value: h.Value})
 			continue
 		}
-		sv, err := s.secrets.store(*h.Secret)
+		sv, err := sess.secrets.store(*h.Secret)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("header %s: %w", name, err)
 		}
@@ -289,7 +310,7 @@ func (s *Server) resolveParams(auth *authInput, headers []headerInput, extension
 		for _, src := range sources {
 			value := src.value
 			if src.ref != "" {
-				v, err := s.secrets.resolve(src.ref)
+				v, err := sess.secrets.resolve(src.ref)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -307,7 +328,7 @@ func (s *Server) resolveParams(auth *authInput, headers []headerInput, extension
 	return params, av, views, nil
 }
 
-func (s *Server) resolveAuth(auth *authInput) (paramSource, *authView, error) {
+func resolveAuth(sess *session, auth *authInput) (paramSource, *authView, error) {
 	set := 0
 	for _, ok := range []bool{auth.Bearer != nil, auth.Basic != nil, auth.APIKey != nil} {
 		if ok {
@@ -320,7 +341,7 @@ func (s *Server) resolveAuth(auth *authInput) (paramSource, *authView, error) {
 	case set > 1:
 		return paramSource{}, nil, errors.New(`"auth" takes one of "bearer", "basic" and "apiKey"`)
 	case auth.Bearer != nil:
-		sv, err := s.secrets.store(*auth.Bearer)
+		sv, err := sess.secrets.store(*auth.Bearer)
 		if err != nil {
 			return paramSource{}, nil, fmt.Errorf("bearer token: %w", err)
 		}
@@ -331,7 +352,7 @@ func (s *Server) resolveAuth(auth *authInput) (paramSource, *authView, error) {
 		if strings.Contains(user, ":") {
 			return paramSource{}, nil, errors.New("a basic auth username can't contain a colon")
 		}
-		sv, err := s.secrets.store(auth.Basic.Password)
+		sv, err := sess.secrets.store(auth.Basic.Password)
 		if err != nil {
 			return paramSource{}, nil, fmt.Errorf("basic auth password: %w", err)
 		}
@@ -344,7 +365,7 @@ func (s *Server) resolveAuth(auth *authInput) (paramSource, *authView, error) {
 		if !validHeaderName(header) {
 			return paramSource{}, nil, fmt.Errorf("%q isn't a valid header name for the API key", auth.APIKey.Header)
 		}
-		sv, err := s.secrets.store(auth.APIKey.Key)
+		sv, err := sess.secrets.store(auth.APIKey.Key)
 		if err != nil {
 			return paramSource{}, nil, fmt.Errorf("API key: %w", err)
 		}
@@ -368,8 +389,8 @@ func validHeaderName(name string) bool {
 
 // headerParams resolves the auth preset and headers for requests the
 // inspector makes outside of a connection, such as fetching a card.
-func (s *Server) headerParams(auth *authInput, headers []headerInput) (http.Header, []string, error) {
-	params, _, _, err := s.resolveParams(auth, headers, nil, nil)
+func headerParams(sess *session, auth *authInput, headers []headerInput) (http.Header, []string, error) {
+	params, _, _, err := resolveParams(sess, auth, headers, nil, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -387,6 +408,7 @@ func (s *Server) headerParams(auth *authInput, headers []headerInput) (http.Head
 }
 
 func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) {
+	sess := sessionOf(r)
 	var req connectionRequest
 	if !decodeRequest(w, r, &req) {
 		return
@@ -401,12 +423,12 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 	var defaultIface *agents.Interface
 	var fetched validate.CardInput
 	if len(req.Card) == 0 && req.CardURL != "" {
-		headers, secrets, err := s.headerParams(req.Auth, req.Headers)
+		headers, secrets, err := headerParams(sess, req.Auth, req.Headers)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		res, msg := s.fetchCard(r, req.CardURL, headers, secrets)
+		res, msg := fetchCard(r, sess, req.CardURL, headers, secrets)
 		if msg != "" {
 			writeError(w, http.StatusBadGateway, msg)
 			return
@@ -441,7 +463,7 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, "The interface needs a URL.")
 			return
 		}
-		iface.Supported = s.dialer.Supports(iface.ProtocolBinding, iface.ProtocolVersion)
+		iface.Supported = sess.dialer.Supports(iface.ProtocolBinding, iface.ProtocolVersion)
 		if !iface.Supported {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("The inspector doesn't support %s %s.", iface.ProtocolBinding, iface.ProtocolVersion))
 			return
@@ -467,7 +489,7 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 	conn.view.Interface = iface
 	conn.view.Custom = iface.Source == "custom"
 
-	params, av, hv, err := s.resolveParams(req.Auth, req.Headers, req.Extensions, req.ServiceParams)
+	params, av, hv, err := resolveParams(sess, req.Auth, req.Headers, req.Extensions, req.ServiceParams)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -481,44 +503,58 @@ func (s *Server) handleCreateConnection(w http.ResponseWriter, r *http.Request) 
 		},
 		Tenant: req.Tenant,
 	}
-	client, err := s.dialer.Dial(r.Context(), iface, interceptor)
+	client, err := sess.dialer.Dial(r.Context(), iface, interceptor)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "Couldn't create a client for the interface: "+err.Error())
 		return
 	}
 	conn.client = client
+	conn.ctx, conn.cancel = context.WithCancel(sess.ctx)
 	conn.contextID = req.ContextID
 	if req.OpenTask != nil && req.OpenTask.ID != "" {
 		conn.openTask = req.OpenTask
 	}
-	s.conns.add(conn)
+	if err := sess.conns.add(conn); err != nil {
+		conn.destroy()
+		status := http.StatusTooManyRequests
+		if errors.Is(err, errSessionEnded) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, capitalize(err.Error())+".")
+		return
+	}
 	if req.Replaces != "" {
-		s.hooks.move(req.Replaces, conn.view.ID)
+		sess.hooks.move(req.Replaces, conn.view.ID)
 	}
 	writeJSON(w, http.StatusCreated, conn.response())
 }
 
-func (s *Server) connection(w http.ResponseWriter, r *http.Request) (*connection, bool) {
-	c, ok := s.conns.get(r.PathValue("id"))
-	if !ok {
-		writeError(w, http.StatusNotFound, "Unknown connection. Connect to the agent again.")
+// withConnection runs h with the connection the request names, and holds
+// the connection until h returns, so it isn't replaced or destroyed while
+// h uses it.
+func (s *Server) withConnection(h func(http.ResponseWriter, *http.Request, *connection)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, release, ok := sessionOf(r).conns.acquire(r.PathValue("id"))
+		if !ok {
+			writeErrorCode(w, http.StatusNotFound, "unknownConnection", "Unknown connection. Connect to the agent again.")
+			return
+		}
+		defer release()
+		h(w, r, conn)
 	}
-	return c, ok
 }
 
-func (s *Server) handleGetConnection(w http.ResponseWriter, r *http.Request) {
-	if c, ok := s.connection(w, r); ok {
-		writeJSON(w, http.StatusOK, c.response())
-	}
+func (s *Server) handleGetConnection(w http.ResponseWriter, _ *http.Request, conn *connection) {
+	writeJSON(w, http.StatusOK, conn.response())
 }
 
+// handleDeleteConnection removes a connection. Its calls in progress end,
+// and its client is closed once they have.
 func (s *Server) handleDeleteConnection(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.conns.remove(r.PathValue("id"))
-	if !ok {
+	if !sessionOf(r).conns.remove(r.PathValue("id")) {
 		writeError(w, http.StatusNotFound, "Unknown connection.")
 		return
 	}
-	_ = c.client.Destroy()
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -63,6 +63,18 @@ The inspector prints a URL with a per-run token, which the browser exchanges for
 
 Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 
+## Running a shared instance
+
+`a2a-inspector --hosted` runs the inspector as a service for multiple users:
+
+- **Sessions:** every browser gets its own session, from a cookie set on its first API call, with its own connections, credentials and traffic. Sessions live in memory and end after `--session-idle-timeout` (10 minutes) without an open tab, or after `--session-max-age` (8 hours). Run a single instance.
+- **Access:** the inspector doesn't sign users in. Who can reach it is up to where you deploy it, for example your platform's access control or an authenticating proxy in front of it. Serve it over HTTPS: the session cookie is `Secure`, which browsers keep over plain HTTP only on `localhost`.
+- **Egress:** it connects only to public addresses, so users can't reach the network it runs in or a cloud metadata server. `--egress-allow` adds exceptions: CIDR blocks, IP addresses, host names or `*.example.com`. The check applies to every transport and redirect. Requests go through `HTTPS_PROXY` when it's set; the proxy resolves names again, so it should apply its own egress rules too. Locally, `--egress=public` turns on the same policy.
+- **Switches:** the webhook receiver is off, since agents can't reach an instance behind access control, and secrets can't refer to the server's environment variables.
+- **Limits:** `--max-sessions` (500), and per session `--max-connections` (20), `--max-streams` (8), `--traffic-buffer-mib` (4), `--request-rate` (5 per second) and `--session-egress-rate` (10 requests to agents per second). `--egress-rate` (200 per second) caps requests to agents over all sessions, and `--max-stream-duration` (30 minutes) ends long streams.
+- **Limits per client:** a client that drops its cookie gets a new session, so per-session limits alone don't stop one client from using up the shared ones. `--client-header` names a header the proxy in front of the inspector sets to identify the client: `X-Forwarded-For` for its address, or a header with the signed-in user from an authenticating proxy. A client then has at most `--client-max-sessions` (10) sessions, starts 10 at once and then one every 10 seconds, and makes up to `--client-egress-rate` (50 per second) requests to agents. `--trusted-proxies` (1) is how many proxies add an entry to the header; the client is the entry that many from the end, so entries a client adds itself are ignored. IPv6 addresses count per /64. Use a header clients can't set past the proxy, and leave this off when many users share an address, such as event attendees on one network.
+- **Listening:** on all addresses and on `$PORT`, or 8080. The log has session counts and blocked destinations, never traffic.
+
 ## Development
 
 `main.go` is the command, `inspector/` the public package it runs, `internal/` the backend, and `ui/` the React UI. The built UI in `ui/dist` is committed, so building the binary needs only Go.

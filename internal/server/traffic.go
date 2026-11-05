@@ -35,11 +35,16 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Streaming isn't supported by this server.")
 		return
 	}
+	sess := sessionOf(r)
+	if !s.openStream(w, sess) {
+		return
+	}
+	defer sess.closeStream()
 	var filter func(*traffic.Entry) bool
 	if id := r.URL.Query().Get("connectionId"); id != "" {
 		filter = func(e *traffic.Entry) bool { return e.ConnectionID == id }
 	}
-	snapshot, updates, cancel := s.traffic.Subscribe(filter)
+	snapshot, updates, cancel := sess.traffic.Subscribe(filter)
 	defer cancel()
 
 	h := w.Header()
@@ -60,7 +65,7 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-s.ctx.Done():
+		case <-sess.ctx.Done():
 			return
 		case <-keepAlive.C:
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {

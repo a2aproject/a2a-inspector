@@ -112,7 +112,7 @@ func TestTaskRoutes(t *testing.T) {
 		if res.Webhook == nil || params["url"] != res.Webhook.URL || !strings.HasPrefix(res.Webhook.URL, "http://127.0.0.1:8080/hooks/wh-") {
 			t.Fatalf("webhook = %+v, agent got %v", res.Webhook, params)
 		}
-		wh, ok := s.hooks.webhook(res.Webhook.ID)
+		wh, ok := s.local.hooks.webhook(res.Webhook.ID)
 		if !ok || params["token"] != wh.token || wh.taskID != "a:b/c" || wh.connectionID != conn.ID {
 			t.Errorf("webhook = %+v, agent got %v", wh, params)
 		}
@@ -186,7 +186,7 @@ func TestPatchConfig(t *testing.T) {
 	if cfg := decodeBody[configResponse](t, w); w.Code != http.StatusOK || cfg.WebhookBaseURL != "https://tunnel.example.com/inspector" || cfg.DefaultWebhookBaseURL != "http://127.0.0.1:8080" || cfg.Mode != "local" {
 		t.Fatalf("PATCH = %d %+v", w.Code, cfg)
 	}
-	if _, view := s.hooks.create(&connection{}, "", s.webhookBaseURL()); !strings.HasPrefix(view.URL, "https://tunnel.example.com/inspector/hooks/wh-") {
+	if _, view := s.local.hooks.create(&connection{}, "", s.webhookBaseURL()); !strings.HasPrefix(view.URL, "https://tunnel.example.com/inspector/hooks/wh-") {
 		t.Errorf("webhook URL = %q", view.URL)
 	}
 	for _, body := range []string{

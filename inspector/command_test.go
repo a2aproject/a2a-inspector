@@ -358,3 +358,98 @@ func TestTransportFlags(t *testing.T) {
 		t.Errorf("ParseFlags() = %v, option = %q", err, option)
 	}
 }
+
+func TestRunHosted(t *testing.T) {
+	r := start(t, "--hosted", "--host", "127.0.0.1", "--port", "0", "--max-sessions", "3", "--client-header", "X-Forwarded-For")
+	re := regexp.MustCompile(`hosted mode on (\S+)`)
+	var addr string
+	deadline := time.Now().Add(5 * time.Second)
+	for addr == "" && time.Now().Before(deadline) {
+		if m := re.FindStringSubmatch(r.stdout.String()); m != nil {
+			addr = m[1]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if addr == "" || strings.Contains(r.stdout.String(), "token=") {
+		t.Fatalf("stdout = %q", r.stdout.String())
+	}
+	select {
+	case opened := <-r.opened:
+		t.Errorf("opened %q in hosted mode", opened)
+	default:
+	}
+	if !strings.Contains(r.stderr.String(), "egress public; limits: 3 sessions") ||
+		!strings.Contains(r.stderr.String(), "per client from X-Forwarded-For (1 trusted proxies) 10 sessions, 50 requests/s to agents") {
+		t.Errorf("stderr = %q, want the limits", r.stderr.String())
+	}
+	resp, err := http.Get("http://" + addr + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var config struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil || config.Mode != "hosted" {
+		t.Errorf("config = %+v, %v", config, err)
+	}
+	if !strings.Contains(r.stderr.String(), "session started (1 active)") {
+		t.Errorf("stderr = %q, want the new session logged", r.stderr.String())
+	}
+}
+
+func TestHostedDefaults(t *testing.T) {
+	env := func(port string) func(string) string {
+		return func(string) string { return port }
+	}
+	f := flags{host: "127.0.0.1", port: 8080, given: map[string]bool{}}
+	if err := hostedDefaults(&f, env("9090")); err != nil || f.host != "0.0.0.0" || f.port != 9090 {
+		t.Errorf("hostedDefaults() = %v, %s:%d", err, f.host, f.port)
+	}
+	f = flags{host: "127.0.0.1", port: 8081, given: map[string]bool{"host": true, "port": true}}
+	if err := hostedDefaults(&f, env("9090")); err != nil || f.host != "127.0.0.1" || f.port != 8081 {
+		t.Errorf("hostedDefaults() with flags = %v, %s:%d", err, f.host, f.port)
+	}
+	f = flags{given: map[string]bool{}}
+	if err := hostedDefaults(&f, env("http")); err == nil {
+		t.Error("hostedDefaults() accepted $PORT=http")
+	}
+}
+
+func TestHostedServerOptions(t *testing.T) {
+	limits := server.Limits{MaxSessions: 5, IdleTimeout: time.Minute}
+	so, err := serverOptions(Options{}, flags{hosted: true, limits: limits, trafficMiB: 2, egressAllow: []string{"10.1.0.0/16"}})
+	if err != nil || !so.Hosted || so.Egress == nil || so.Limits.MaxSessions != 5 || so.Limits.TrafficBytes != 2<<20 {
+		t.Errorf("hosted options = %+v, %v", so, err)
+	}
+	if so, err := serverOptions(Options{}, flags{}); err != nil || so.Egress != nil || so.Hosted {
+		t.Errorf("local options = %+v, %v; want no egress policy", so, err)
+	}
+	if so, err := serverOptions(Options{}, flags{egress: "public"}); err != nil || so.Egress == nil {
+		t.Errorf("local --egress=public = %+v, %v", so, err)
+	}
+	perClient := server.Limits{ClientHeader: " X-Forwarded-For ", TrustedProxies: 2, ClientSessions: 3}
+	given := map[string]bool{"client-header": true, "trusted-proxies": true, "client-max-sessions": true}
+	if so, err := serverOptions(Options{}, flags{hosted: true, limits: perClient, given: given}); err != nil ||
+		so.Limits.ClientHeader != "X-Forwarded-For" || so.Limits.TrustedProxies != 2 || so.Limits.ClientSessions != 3 {
+		t.Errorf("limits per client = %+v, %v", so.Limits, err)
+	}
+	for _, tc := range []struct {
+		f    flags
+		want string
+	}{
+		{flags{hosted: true, agentCard: "x", given: map[string]bool{"agent-card": true}}, "--agent-card doesn't work with --hosted"},
+		{flags{hosted: true, given: map[string]bool{"auth": true}}, "--auth doesn't work with --hosted"},
+		{flags{given: map[string]bool{"max-sessions": true}}, "--max-sessions needs --hosted"},
+		{flags{given: map[string]bool{"client-header": true}}, "--client-header needs --hosted"},
+		{flags{hosted: true, given: map[string]bool{"client-max-sessions": true}}, "--client-max-sessions needs --client-header"},
+		{flags{hosted: true, limits: server.Limits{ClientHeader: "X-Forwarded-For"}}, "--trusted-proxies must be at least 1"},
+		{flags{egressAllow: []string{"10.0.0.0/8"}}, "--egress-allow needs --egress=public"},
+		{flags{hosted: true, egress: "none"}, `--egress: "none"`},
+		{flags{hosted: true, egressAllow: []string{"not a host"}}, "--egress-allow"},
+	} {
+		if _, err := serverOptions(Options{}, tc.f); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("serverOptions(%+v) = %v, want %q", tc.f, err, tc.want)
+		}
+	}
+}

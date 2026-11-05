@@ -1,5 +1,5 @@
 import { useEffect, useReducer } from 'react';
-import { ApiError, readEvents } from './api/client';
+import { ApiError, isSessionRenewed, readEvents } from './api/client';
 import type { Frame, GRPCMessage, TrafficEntry } from './api/types';
 import type { SSEEvent } from './sse';
 
@@ -81,14 +81,15 @@ export function useTraffic(enabled: boolean): TrafficState {
         dispatch({ type: 'event', event });
       })
         .catch((err: unknown) => {
-          // Without a session, retrying doesn't help.
-          if (err instanceof ApiError && err.status === 401) abort.abort();
+          // A renewed session's feed starts right away; without a session, retrying doesn't help.
+          if (isSessionRenewed(err)) delay = 0;
+          else if (err instanceof ApiError && err.status === 401) abort.abort();
         })
         .finally(() => {
           dispatch({ type: 'live', live: false });
           if (!abort.signal.aborted) {
             timer = setTimeout(connect, delay);
-            delay = Math.min(delay * 2, 10_000);
+            delay = Math.min(Math.max(delay * 2, 500), 10_000);
           }
         });
     };
