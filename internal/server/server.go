@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-inspector/internal/agents"
+	"github.com/a2aproject/a2a-inspector/internal/catalog"
 	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -92,6 +93,9 @@ type Options struct {
 	// receiver under, such as a tunnel. It defaults to the inspector's own
 	// address.
 	WebhookBaseURL string
+	// Catalog, if set, is an AI Catalog file or URL whose agents every user
+	// sees. It's read when the server starts.
+	Catalog string
 }
 
 // Preferences choose among a card's interfaces, from --transport and --a2a-version.
@@ -119,9 +123,11 @@ type Server struct {
 	supports func(binding, version string) bool
 	// local is the session of a local inspector; sessions are the ones of a
 	// hosted inspector.
-	local        *session
-	sessions     *sessions
-	startup      *startupConfig
+	local    *session
+	sessions *sessions
+	startup  *startupConfig
+	// shared is the agents of Options.Catalog.
+	shared       *catalog.Result
 	mux          *http.ServeMux
 	cookieName   string
 	anyHost      bool
@@ -179,6 +185,16 @@ func New(opts Options) (*Server, error) {
 		}
 		s.webhookURL = u
 	}
+	if opts.Catalog != "" {
+		shared, err := s.loadCatalog(opts.Catalog)
+		if err != nil {
+			return nil, fmt.Errorf("catalog %s: %w", opts.Catalog, err)
+		}
+		for _, p := range shared.Problems {
+			s.logf("catalog %s: %s", p.Catalog, p.Message)
+		}
+		s.shared = shared
+	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	if opts.Hosted {
 		s.anyHost = true
@@ -197,6 +213,8 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("POST /api/card:resolve", s.handleCardResolve)
 	s.mux.HandleFunc("POST /api/card:validate", s.handleCardValidate)
+	s.mux.HandleFunc("POST /api/catalog:resolve", s.handleCatalogResolve)
+	s.mux.HandleFunc("GET /api/catalog", s.handleSharedCatalog)
 	s.mux.HandleFunc("POST /api/connections", s.handleCreateConnection)
 	s.mux.HandleFunc("GET /api/connections/{id}", s.withConnection(s.handleGetConnection))
 	s.mux.HandleFunc("DELETE /api/connections/{id}", s.handleDeleteConnection)

@@ -18,7 +18,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -54,13 +53,19 @@ const (
 // path is used as is.
 // Local file paths aren't supported.
 func NormalizeCardURL(ref string) (string, error) {
+	return NormalizeURL(ref, WellKnownCardPath, "agent card URL")
+}
+
+// NormalizeURL is NormalizeCardURL for any document with a well-known path;
+// what names the URL in errors.
+func NormalizeURL(ref, wellKnownPath, what string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return "", errors.New("agent card URL is empty")
+		return "", fmt.Errorf("%s is empty", what)
 	}
 	if !strings.Contains(ref, "://") {
 		if looksLikeFilePath(ref) {
-			return "", fmt.Errorf("%q looks like a local file path; only http and https agent card URLs are supported", ref)
+			return "", fmt.Errorf("%q looks like a local file path; only http and https %ss are supported", ref, what)
 		}
 		host := ref
 		if i := strings.IndexAny(host, "/?#"); i >= 0 {
@@ -74,16 +79,16 @@ func NormalizeCardURL(ref string) (string, error) {
 	}
 	u, err := url.Parse(ref)
 	if err != nil {
-		return "", fmt.Errorf("invalid agent card URL %q: %w", ref, err)
+		return "", fmt.Errorf("invalid %s %q: %w", what, ref, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("unsupported scheme %q in agent card URL; use http or https", u.Scheme)
+		return "", fmt.Errorf("unsupported scheme %q in %s; use http or https", u.Scheme, what)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("agent card URL %q has no host", ref)
+		return "", fmt.Errorf("%s %q has no host", what, ref)
 	}
 	if u.Path == "" || u.Path == "/" {
-		u.Path = WellKnownCardPath
+		u.Path = wellKnownPath
 		u.RawPath = ""
 	}
 	u.Fragment = ""
@@ -113,8 +118,25 @@ func IsLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// CardResponse is the HTTP response to a card request.
-type CardResponse struct {
+// SameOrigin reports whether two http(s) URLs have the same scheme, host and port.
+func SameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(hostPort(a), hostPort(b))
+}
+
+// hostPort returns the host and port of an http(s) URL, with the scheme's
+// default port when it has none.
+func hostPort(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Host
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return u.Hostname() + ":443"
+	}
+	return u.Hostname() + ":80"
+}
+
+// Response is the HTTP response to a request for a card or another JSON document.
+type Response struct {
 	// URL is the final URL, after redirects.
 	URL         string
 	StatusCode  int
@@ -129,13 +151,18 @@ type CardResponse struct {
 // FetchCard requests cardURL with the given extra headers and returns the
 // response whatever its status. It only returns an error when no response
 // was received.
-func FetchCard(ctx context.Context, client *http.Client, cardURL string, headers http.Header) (*CardResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cardURL, nil)
+func FetchCard(ctx context.Context, client *http.Client, cardURL string, headers http.Header) (*Response, error) {
+	return Fetch(ctx, client, cardURL, "application/json", headers)
+}
+
+// Fetch is FetchCard for any JSON document, with the given Accept header.
+func Fetch(ctx context.Context, client *http.Client, rawURL, accept string, headers http.Header) (*Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	maps.Copy(req.Header, headers)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "a2a-inspector")
 
 	start := time.Now()
@@ -146,9 +173,9 @@ func FetchCard(ctx context.Context, client *http.Client, cardURL string, headers
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxCardSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading the card response: %w", err)
+		return nil, fmt.Errorf("reading the response: %w", err)
 	}
-	out := &CardResponse{
+	out := &Response{
 		URL:         resp.Request.URL.String(),
 		StatusCode:  resp.StatusCode,
 		Status:      resp.Status,

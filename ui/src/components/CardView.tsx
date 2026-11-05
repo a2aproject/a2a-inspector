@@ -63,10 +63,22 @@ function CardContent(props: Props) {
       </div>
     );
   }
+  if (agent.status === 'idle') {
+    return (
+      <div className="notice">
+        <p>The card hasn't been fetched yet.</p>
+        <p>
+          <button type="button" className="button-quiet" onClick={props.onFetchCard}>
+            Fetch the card
+          </button>
+        </p>
+      </div>
+    );
+  }
   if (agent.status === 'loading') {
     return (
       <p role="status" className="notice">
-        Fetching the card from {agent.url}…
+        {agent.card !== undefined ? 'Checking the card from the catalog…' : `Fetching the card from ${agent.url}…`}
       </p>
     );
   }
@@ -179,7 +191,15 @@ function CardOverview({
         </p>
         {card.description && <p>{card.description}</p>}
         <p className="faint small">
-          Fetched from <span className="mono break">{result.cardUrl}</span> in {result.call.latencyMs} ms
+          {agent.card !== undefined ? (
+            <>
+              From the catalog entry <span className="mono break">{agent.identifier}</span>
+            </>
+          ) : (
+            <>
+              Fetched from <span className="mono break">{result.cardUrl}</span> in {result.call.latencyMs} ms
+            </>
+          )}
         </p>
       </header>
 

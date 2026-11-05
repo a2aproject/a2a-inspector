@@ -6,15 +6,28 @@ import {
   countFindings,
   findAgent,
   initialAgentsState,
+  sameAgent,
   selectedInterfaceOf,
   type TaskActivity,
   withoutConnection,
 } from './agents';
 import { viewPayload, viewPushConfig, viewPushConfigs } from './a2a/view';
 import { ApiError, api, isSessionRenewed, isUnknownConnection, onSessionRenewed } from './api/client';
-import type { AgentInterface, AgentResult, Config, Connection, ConnectionRequest, ListTasksQuery, SendRequest } from './api/types';
+import type {
+  AgentInterface,
+  AgentResult,
+  CardResolveResponse,
+  CatalogAgent,
+  Config,
+  Connection,
+  ConnectionRequest,
+  ListTasksQuery,
+  SendRequest,
+} from './api/types';
 import { asObject, asObjects } from './card';
+import { agentsFromCatalog, loadAgents, saveAgents, toCatalog } from './catalog';
 import { AgentList } from './components/AgentList';
+import type { CatalogView } from './components/CatalogDiscovery';
 import { CardView } from './components/CardView';
 import { ChatPanel, type SentEcho } from './components/ChatPanel';
 import { ResizeHandle } from './components/ResizeHandle';
@@ -88,6 +101,20 @@ function duration(seconds: number): string {
 let nextItem = 1;
 const itemId = () => `item-${nextItem++}`;
 
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Downloads the agents as an AI Catalog file. */
+function download(text: string, name: string) {
+  const href = URL.createObjectURL(new Blob([text], { type: 'application/ai-catalog+json' }));
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
 /** Labels of task operations in the activity list. */
 const operationLabels: Record<Exclude<TaskOperation['type'], 'stop'>, string> = {
   get: 'Get task',
@@ -143,31 +170,54 @@ export function App() {
     [setOpen],
   );
 
-  // Adding an agent that's already in the list selects it and fetches its card again. The card
-  // request carries the agent's auth and headers, for agents that protect their card.
+  const newId = useCallback(() => `agent-${nextId.current++}`, []);
+
+  /**
+   * Selects the agent and fetches its card, or checks the card its catalog entry has. The card
+   * request carries the agent's auth and headers, for agents that protect their card.
+   */
+  const resolveAgent = useCallback((agent: Pick<AgentEntry, 'id' | 'url' | 'card' | 'settings'>) => {
+    const { id, card } = agent;
+    dispatch({ type: 'refresh', id });
+    let pending: Promise<CardResolveResponse>;
+    if (card !== undefined) {
+      pending = retryRenewed(() => api.validateCard(card)).then((v) => ({
+        cardUrl: '',
+        payload: { protocolVersion: v.protocolVersion, raw: card, validation: v.validation },
+        versions: v.versions,
+        interfaces: v.interfaces,
+        defaultInterface: v.defaultInterface,
+        call: { latencyMs: 0, error: null },
+      }));
+    } else {
+      const resolve = (s: ConnectionSettings) => {
+        const { auth, headers } = settingsRequest(s);
+        return api.resolveCard(agent.url, { auth, headers });
+      };
+      pending = resolve(agent.settings).catch((err: unknown) => {
+        if (!isSessionRenewed(err)) throw err;
+        return resolve(settingsAfterSessionLoss(agent.settings));
+      });
+    }
+    pending.then(
+      (result) => dispatch({ type: 'resolved', id, result }),
+      (err: unknown) => dispatch({ type: 'failed', id, error: message(err) }),
+    );
+  }, []);
+
+  // Adding an agent that's already in the list selects it and fetches its card again.
   const addAgent = useCallback(
     (url: string, start?: { settings: ConnectionSettings; prefer?: Config['startup'] }) => {
       const existing = findAgent(agents, url);
-      const id = existing?.id ?? `agent-${nextId.current++}`;
-      dispatch(
-        existing ? { type: 'refresh', id } : { type: 'add', id, url, settings: start?.settings, prefer: start?.prefer?.preferences },
-      );
-      const settings = existing?.settings ?? start?.settings ?? defaultSettings;
-      const resolve = (s: ConnectionSettings) => {
-        const { auth, headers } = settingsRequest(s);
-        return api.resolveCard(url, { auth, headers });
-      };
-      resolve(settings)
-        .catch((err: unknown) => {
-          if (!isSessionRenewed(err)) throw err;
-          return resolve(settingsAfterSessionLoss(settings));
-        })
-        .then(
-        (result) => dispatch({ type: 'resolved', id, result }),
-        (err: unknown) => dispatch({ type: 'failed', id, error: message(err) }),
-      );
+      if (existing) {
+        resolveAgent(existing);
+        return;
+      }
+      const id = newId();
+      dispatch({ type: 'add', id, url, settings: start?.settings, prefer: start?.prefer?.preferences });
+      resolveAgent({ id, url, card: undefined, settings: start?.settings ?? defaultSettings });
     },
-    [agents],
+    [agents, newId, resolveAgent],
   );
 
   useEffect(
@@ -187,11 +237,31 @@ export function App() {
     started.current = true;
     retryRenewed(api.config).then(
       (config) => {
+        // The saved agents come first, so the agent given on the command line can be one of them.
+        const saved = loadAgents({ envSecrets: config.features.envSecrets, id: newId });
+        dispatch({ type: 'addEntries', entries: saved });
         setSession({ state: 'ready', config });
+        if (config.features.sharedCatalog) {
+          retryRenewed(api.sharedCatalog).then(
+            (shared) =>
+              dispatch({
+                type: 'shared',
+                entries: agentsFromCatalog(shared.agents, undefined, { envSecrets: false, id: newId }).map((a) => ({ ...a, shared: true })),
+              }),
+            () => undefined,
+          );
+        } else {
+          dispatch({ type: 'shared', entries: [] });
+        }
         const startup = config.startup;
         const settings = settingsFromHeaders(startup?.headers ?? []);
+        const existing = config.agentCardUrl ? findAgent(saved, config.agentCardUrl) : undefined;
         if (startup?.endpoint) {
-          dispatch({ type: 'addEndpoint', id: `agent-${nextId.current++}`, iface: startup.endpoint, settings });
+          dispatch({ type: 'addEndpoint', id: newId(), iface: startup.endpoint, settings: startup.headers.length ? settings : undefined });
+        } else if (existing) {
+          // Credentials given on the command line replace the saved settings, which have no secrets.
+          if (startup?.headers.length) dispatch({ type: 'settings', id: existing.id, settings });
+          resolveAgent(startup?.headers.length ? { ...existing, settings } : existing);
         } else if (config.agentCardUrl) {
           addAgent(config.agentCardUrl, { settings, prefer: startup });
         }
@@ -204,7 +274,77 @@ export function App() {
         }
       },
     );
-  }, [addAgent]);
+  }, [addAgent, newId, resolveAgent]);
+
+  // Saves the agents whenever what's saved about them changes, once the saved ones are loaded.
+  const savedCatalog = useRef('');
+  const envSecrets = session.state === 'ready' ? session.config.features.envSecrets : true;
+  useEffect(() => {
+    if (session.state !== 'ready') return;
+    savedCatalog.current = saveAgents(toCatalog(agents, { envSecrets }), savedCatalog.current);
+  }, [agents, envSecrets, session.state]);
+
+  const [catalogView, setCatalogView] = useState<CatalogView>();
+  const [notice, setNotice] = useState<{ error: boolean; text: string }>();
+
+  async function listCatalog(url: string, credentials: ConnectionSettings) {
+    setCatalogView({ url, state: 'loading' });
+    const { auth, headers } = settingsRequest(credentials);
+    try {
+      setCatalogView({ url, state: 'done', result: await retryRenewed(() => api.resolveCatalog({ url, auth, headers })) });
+    } catch (err) {
+      setCatalogView({ url, state: 'failed', error: message(err) });
+    }
+  }
+
+  /** Adds agents from the listed catalog. One added by itself is fetched right away, as one added by its URL. */
+  function addFromCatalog(list: CatalogAgent[]) {
+    const entries = agentsFromCatalog(list, undefined, { envSecrets, id: newId });
+    const [entry] = entries;
+    if (entries.length !== 1 || !entry) {
+      dispatch({ type: 'addEntries', entries });
+      return;
+    }
+    const existing = agents.find((a) => sameAgent(a, entry));
+    dispatch({ type: 'addEntries', entries, select: entry.id });
+    resolveAgent(existing ?? entry);
+  }
+
+  async function importCatalog(file: File) {
+    setNotice(undefined);
+    let doc: unknown;
+    try {
+      doc = JSON.parse(await file.text());
+    } catch {
+      setNotice({ error: true, text: `${file.name} isn't a JSON file.` });
+      return;
+    }
+    try {
+      const res = await retryRenewed(() => api.resolveCatalog({ catalog: doc }));
+      if (res.call.error) {
+        setNotice({ error: true, text: res.call.error.message });
+        return;
+      }
+      const entries = agentsFromCatalog(res.agents, res.inspector, { envSecrets, id: newId });
+      const added = entries.filter((e) => !agentsRef.current.some((a) => sameAgent(a, e))).length;
+      dispatch({ type: 'addEntries', entries });
+      const notes = [
+        `Imported ${plural(added, 'agent')} from ${file.name}.`,
+        entries.length > added ? `${plural(entries.length - added, 'agent')} already in the list.` : '',
+        res.skipped ? `${plural(res.skipped, 'other entry', 'other entries')} skipped.` : '',
+        res.problems?.length ? `${plural(res.problems.length, 'entry', 'entries')} couldn't be read.` : '',
+      ];
+      setNotice({ error: false, text: notes.filter(Boolean).join(' ') });
+    } catch (err) {
+      setNotice({ error: true, text: message(err) });
+    }
+  }
+
+  function selectAgent(id: string) {
+    dispatch({ type: 'select', id });
+    const agent = agents.find((a) => a.id === id);
+    if (agent?.status === 'idle') resolveAgent(agent);
+  }
 
   /** Returns the agent's connection, connecting again when the interface or settings changed. */
   async function connect(agent: AgentEntry): Promise<Connection> {
@@ -213,7 +353,7 @@ export function App() {
       throw new Error('Pick an interface first.');
     }
     if (hasLostSecrets(agent.settings)) {
-      throw new Error("The inspector's session ended, and the credentials you entered with it. Enter them again in the connection settings.");
+      throw new Error("Enter the credentials again in the connection settings: the inspector doesn't keep them after its session ends or the page is reloaded.");
     }
     if (agent.connection && agent.connectionKey === connectionKey(iface, agent.settings)) {
       return agent.connection;
@@ -513,8 +653,11 @@ export function App() {
             hidden={!layout.left.open}
             agents={agents}
             selectedId={selectedId}
+            envSecrets={envSecrets}
+            catalog={catalogView}
+            notice={notice}
             onAdd={addAgent}
-            onSelect={(id) => dispatch({ type: 'select', id })}
+            onSelect={selectAgent}
             onRemove={(id) => {
               const agent = agents.find((a) => a.id === id);
               streams.current.get(id)?.abort();
@@ -525,6 +668,11 @@ export function App() {
               if (agent?.connection) api.disconnect(agent.connection.id).catch(() => undefined);
               dispatch({ type: 'remove', id });
             }}
+            onListCatalog={(url, credentials) => void listCatalog(url, credentials)}
+            onAddFromCatalog={addFromCatalog}
+            onCloseCatalog={() => setCatalogView(undefined)}
+            onImport={(file) => void importCatalog(file)}
+            onExport={() => download(`${JSON.stringify(toCatalog(agents, { envSecrets, exported: true }), null, 2)}\n`, 'ai-catalog.json')}
             onClose={() => closePanel('left')}
           />
           {layout.left.open && (
@@ -543,12 +691,12 @@ export function App() {
             agent={selected}
             bindings={bindings}
             stale={stale}
-            envSecrets={config?.features.envSecrets ?? true}
+            envSecrets={envSecrets}
             onSelectInterface={(index) => selected && dispatch({ type: 'selectInterface', id: selected.id, index })}
             onAddInterface={(iface) => selected && dispatch({ type: 'addInterface', id: selected.id, iface })}
             onRemoveInterface={(index) => selected && dispatch({ type: 'removeInterface', id: selected.id, index })}
             onSettings={(settings) => selected && dispatch({ type: 'settings', id: selected.id, settings })}
-            onFetchCard={() => selected && addAgent(selected.url)}
+            onFetchCard={() => selected && resolveAgent(selected)}
             onFetchExtendedCard={() => selected && void fetchExtendedCard(selected)}
             onShowTraffic={showTraffic}
           />

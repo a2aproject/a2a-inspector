@@ -40,14 +40,30 @@ export interface TaskLookup {
 
 export type ExtendedCardState = { state: 'loading' } | { state: 'done'; result: AgentResult } | { state: 'failed'; error: string };
 
-/** An agent added in this browser session. */
+/** Identifies an interface, as saved. */
+export type InterfaceRef = Pick<AgentInterface, 'url' | 'protocolBinding' | 'protocolVersion' | 'tenant'>;
+
+/** An agent in the list, saved in browser storage. */
 export interface AgentEntry {
   id: string;
   /** "card" for an agent added by its card, "endpoint" for an interface without a card. */
   kind: 'card' | 'endpoint';
-  /** The card reference as the user entered it, or the endpoint's URL. */
+  /** The card reference as the user entered it, or the endpoint's URL; empty when card holds the card. */
   url: string;
-  status: 'loading' | 'done' | 'failed';
+  /** "idle" for a saved or shared agent whose card hasn't been fetched yet. */
+  status: 'idle' | 'loading' | 'done' | 'failed';
+  /** The identifier of the catalog entry the agent came from. */
+  identifier?: string;
+  /** The card, for an agent whose catalog entry has the card instead of its URL. */
+  card?: unknown;
+  /** The catalog entry's name for the agent, which wins over the card's. */
+  displayName?: string;
+  /** The card's name when it was last fetched, shown until it's fetched again. */
+  savedName?: string;
+  /** The interface picked before the agent was saved, picked again when the card arrives. */
+  savedInterface?: InterfaceRef;
+  /** From the inspector's shared catalog, so it can't be removed. */
+  shared?: boolean;
   result?: CardResolveResponse;
   /** Set when the inspector rejected the request, for example an invalid URL. */
   error?: string;
@@ -100,6 +116,10 @@ export const initialAgentsState: AgentsState = { agents: [], selectedId: null };
 export type AgentsAction =
   | { type: 'add'; id: string; url: string; settings?: ConnectionSettings; prefer?: Preferences }
   | { type: 'addEndpoint'; id: string; iface: AgentInterface; settings?: ConnectionSettings }
+  /** Adds saved, imported or catalog agents that aren't in the list yet, and selects one if asked. */
+  | { type: 'addEntries'; entries: AgentEntry[]; select?: string }
+  /** The shared catalog's agents: marks those in the list, adds the others, and drops shared agents it no longer lists. */
+  | { type: 'shared'; entries: AgentEntry[] }
   | { type: 'refresh'; id: string }
   | { type: 'resolved'; id: string; result: CardResolveResponse }
   | { type: 'failed'; id: string; error: string }
@@ -150,12 +170,35 @@ function newEntry(id: string, url: string, kind: AgentEntry['kind'], settings?: 
   };
 }
 
+/** A new agent that hasn't been fetched yet, such as a saved one. */
+export function createAgent(id: string, init: Pick<AgentEntry, 'kind' | 'url'> & Partial<AgentEntry>): AgentEntry {
+  return { ...newEntry(id, init.url, init.kind), status: 'idle', ...init, id };
+}
+
 /**
  * The agent already in the list for a card reference: the same text as entered, or the same card
  * URL the backend resolved it to.
  */
 export function findAgent(agents: AgentEntry[], url: string): AgentEntry | undefined {
-  return agents.find((a) => a.url === url || a.result?.cardUrl === url);
+  return url ? agents.find((a) => a.url === url || a.result?.cardUrl === url) : undefined;
+}
+
+export function sameInterface(a: InterfaceRef | undefined, b: InterfaceRef | undefined): boolean {
+  return !!a && !!b && a.url === b.url && a.protocolBinding === b.protocolBinding && a.protocolVersion === b.protocolVersion && (a.tenant ?? '') === (b.tenant ?? '');
+}
+
+/**
+ * Whether two entries are the same agent: the same card URL, the same catalog identifier for cards
+ * from catalog entries, or the same interface for agents without a card.
+ */
+export function sameAgent(a: AgentEntry, b: AgentEntry): boolean {
+  if (a.kind === 'endpoint' || b.kind === 'endpoint') {
+    return a.kind === b.kind && sameInterface(a.customInterfaces[0], b.customInterfaces[0]);
+  }
+  if (a.card !== undefined || b.card !== undefined) {
+    return a.card !== undefined && b.card !== undefined && !!a.identifier && a.identifier === b.identifier;
+  }
+  return !!findAgent([a], b.result?.cardUrl ?? b.url);
 }
 
 function patch(agents: AgentEntry[], id: string, change: Partial<AgentEntry>): AgentEntry[] {
@@ -194,11 +237,16 @@ function resolvedEntry(result: CardResolveResponse, previous: AgentEntry): Parti
   // interfaces move to follow the card's.
   const picked = previous.selectedInterface;
   const oldCount = previous.result?.interfaces.length ?? 0;
+  const saved = [...result.interfaces, ...previous.customInterfaces].findIndex(
+    (iface) => iface.supported && sameInterface(iface, previous.savedInterface),
+  );
   let selected: number | null;
   if (picked != null && picked >= oldCount) {
     selected = result.interfaces.length + (picked - oldCount);
   } else if (picked != null && result.interfaces[picked]?.supported === true) {
     selected = picked;
+  } else if (saved >= 0) {
+    selected = saved;
   } else {
     selected = previous.prefer ? preferredInterface(result.interfaces, previous.prefer) : result.defaultInterface;
   }
@@ -207,6 +255,7 @@ function resolvedEntry(result: CardResolveResponse, previous: AgentEntry): Parti
     result,
     error: undefined,
     selectedInterface: selected,
+    savedInterface: undefined,
   };
 }
 
@@ -217,14 +266,33 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
         agents: [...state.agents, { ...newEntry(action.id, action.url, 'card', action.settings), prefer: action.prefer }],
         selectedId: action.id,
       };
-    case 'addEndpoint':
+    case 'addEndpoint': {
+      const added = { ...newEntry(action.id, action.iface.url, 'endpoint', action.settings), status: 'done' as const, customInterfaces: [action.iface], selectedInterface: 0 };
+      const existing = state.agents.find((a) => sameAgent(a, added));
+      if (existing) {
+        return { agents: patch(state.agents, existing.id, { settings: action.settings ?? existing.settings }), selectedId: existing.id };
+      }
+      return { agents: [...state.agents, added], selectedId: action.id };
+    }
+    case 'addEntries': {
+      const agents = [...state.agents];
+      let selectedId = state.selectedId;
+      for (const entry of action.entries) {
+        const existing = agents.find((a) => sameAgent(a, entry));
+        if (!existing) agents.push(entry);
+        if (entry.id === action.select) selectedId = existing?.id ?? entry.id;
+      }
+      return { agents, selectedId };
+    }
+    case 'shared': {
+      const listed = (a: AgentEntry) => action.entries.some((e) => sameAgent(a, e));
+      const agents = state.agents.filter((a) => !a.shared || listed(a)).map((a) => (listed(a) ? { ...a, shared: true } : a));
+      const added = action.entries.filter((e) => !agents.some((a) => sameAgent(a, e)));
       return {
-        agents: [
-          ...state.agents,
-          { ...newEntry(action.id, action.iface.url, 'endpoint', action.settings), status: 'done', customInterfaces: [action.iface], selectedInterface: 0 },
-        ],
-        selectedId: action.id,
+        agents: [...agents, ...added],
+        selectedId: agents.some((a) => a.id === state.selectedId) ? state.selectedId : null,
       };
+    }
     case 'refresh':
       return { agents: patch(state.agents, action.id, { status: 'loading', error: undefined }), selectedId: action.id };
     case 'resolved': {
@@ -232,8 +300,11 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
       if (!entry) {
         return state;
       }
-      // A different reference (say a bare host) can resolve to a card that's already in the list.
-      const existing = state.agents.find((a) => a.id !== action.id && a.result?.cardUrl === action.result.cardUrl);
+      // A different reference (say a bare host) can resolve to a card that's already in the list,
+      // fetched or saved.
+      const cardUrl = action.result.cardUrl;
+      const existing =
+        cardUrl && state.agents.find((a) => a.id !== action.id && a.kind === 'card' && a.card === undefined && (a.result?.cardUrl === cardUrl || a.url === cardUrl));
       if (!existing) {
         return { ...state, agents: patch(state.agents, action.id, resolvedEntry(action.result, entry)) };
       }
@@ -251,6 +322,7 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
     case 'select':
       return { ...state, selectedId: action.id };
     case 'remove':
+      if (state.agents.some((a) => a.id === action.id && a.shared)) return state;
       return {
         agents: state.agents.filter((a) => a.id !== action.id),
         selectedId: state.selectedId === action.id ? null : state.selectedId,
@@ -382,12 +454,24 @@ export function afterSessionLoss(a: AgentEntry): AgentEntry {
   return { ...withoutConnection(a), settings: settingsAfterSessionLoss(a.settings) };
 }
 
-export function agentName(agent: AgentEntry): string {
+/** The name in the agent's fetched card. */
+export function cardName(agent: AgentEntry): string | undefined {
   const raw = agent.result?.payload?.raw;
   if (raw !== null && typeof raw === 'object' && 'name' in raw && typeof raw.name === 'string' && raw.name) {
     return raw.name;
   }
-  return agent.url;
+  return undefined;
+}
+
+/** The last part of a catalog identifier such as "urn:air:example.com:a2a:research", unless it's a URL. */
+export function identifierName(identifier: string | undefined): string {
+  if (!identifier || identifier.includes('://')) return '';
+  return identifier.slice(Math.max(identifier.lastIndexOf(':'), identifier.lastIndexOf('/')) + 1);
+}
+
+/** The catalog entry's name, the card's, the one saved from the card, the identifier's, or the URL. */
+export function agentName(agent: AgentEntry): string {
+  return agent.displayName || cardName(agent) || agent.savedName || identifierName(agent.identifier) || agent.url || 'Unnamed agent';
 }
 
 export interface FindingCounts {

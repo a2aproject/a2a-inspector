@@ -18,9 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 
+	"github.com/a2aproject/a2a-inspector/internal/agents"
 	"github.com/a2aproject/a2a-inspector/internal/traffic"
 )
 
@@ -34,7 +33,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	}
 	// Go copies the headers of the first request to every redirect.
 	first := via[0].URL
-	if sameOriginURL(req.URL, first) {
+	if agents.SameOrigin(req.URL, first) {
 		return nil
 	}
 	call := traffic.CallFrom(req.Context())
@@ -45,20 +44,4 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 		req.Header.Del(name)
 	}
 	return nil
-}
-
-func sameOriginURL(a, b *url.URL) bool {
-	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(hostPort(a), hostPort(b))
-}
-
-// hostPort returns the host and port of an http(s) URL, with the scheme's
-// default port when it has none.
-func hostPort(u *url.URL) string {
-	if u.Port() != "" {
-		return u.Host
-	}
-	if strings.EqualFold(u.Scheme, "https") {
-		return u.Hostname() + ":443"
-	}
-	return u.Hostname() + ":80"
 }

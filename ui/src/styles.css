@@ -608,7 +608,8 @@ body.resizing.resizing-w {
 
 /* Agents */
 
-.add-agent label {
+.add-agent label,
+.field-label {
   display: block;
   font-size: 13px;
   font-weight: 500;
@@ -687,6 +688,108 @@ body.resizing.resizing-w {
   margin-top: 2px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.agent-name .pill {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+/* AI Catalogs: adding from a catalog URL, its agents, and import and export. */
+
+.add-catalog {
+  margin-top: 12px;
+}
+
+.add-catalog > summary,
+.catalog-credentials > summary {
+  font-size: 13px;
+}
+
+.add-catalog form,
+.catalog-credentials {
+  margin-top: 8px;
+}
+
+.catalog-credentials .header-list li {
+  flex-wrap: wrap;
+}
+
+.catalog-credentials .header-list input:not([type='checkbox']) {
+  flex: 1 1 100px;
+  min-width: 0;
+}
+
+.catalog-results {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-subtle);
+}
+
+.catalog-results .panel-header {
+  margin-bottom: 2px;
+}
+
+.catalog-results h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.catalog-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.catalog-summary .button-quiet {
+  white-space: nowrap;
+}
+
+.catalog-agents {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.catalog-agents li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+}
+
+.catalog-agents li > :not(button) {
+  grid-column: 1;
+}
+
+.catalog-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.catalog-agents li > button {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+}
+
+.catalog-file {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.error-text {
+  color: var(--fail);
 }
 
 /* Card overview */

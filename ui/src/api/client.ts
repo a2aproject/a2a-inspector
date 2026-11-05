@@ -3,6 +3,9 @@ import type {
   AgentResult,
   AuthInput,
   CardResolveResponse,
+  CardValidateResponse,
+  CatalogResolveResponse,
+  CatalogResult,
   Config,
   Connection,
   ConnectionRequest,
@@ -132,6 +135,11 @@ export const api = {
   config: () => request<Config>('/api/config'),
   resolveCard: (url: string, credentials: { auth?: AuthInput; headers?: HeaderInput[] } = {}) =>
     request<CardResolveResponse>('/api/card:resolve', post({ url, ...credentials })),
+  validateCard: (card: unknown) => request<CardValidateResponse>('/api/card:validate', post({ card })),
+  /** Lists the agents of the catalog at url, or of a catalog document such as an imported file. */
+  resolveCatalog: (source: { url: string; auth?: AuthInput; headers?: HeaderInput[] } | { catalog: unknown }) =>
+    request<CatalogResolveResponse>('/api/catalog:resolve', post(source)),
+  sharedCatalog: () => request<CatalogResult>('/api/catalog'),
   /** Sets the webhook base URL for this run; an empty one resets it to the default. */
   updateConfig: (change: { webhookBaseUrl: string }) => request<Config>('/api/config', { method: 'PATCH', body: JSON.stringify(change) }),
   connect: (req: ConnectionRequest) => request<Connection>('/api/connections', post(req)),

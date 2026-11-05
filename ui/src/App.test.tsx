@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import type { AgentResult, CardResolveResponse, Config, Connection, Notification, TrafficEntry } from './api/types';
+import type { AgentResult, CardResolveResponse, CatalogAgent, CatalogResolveResponse, Config, Connection, Notification, TrafficEntry } from './api/types';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -490,7 +490,7 @@ describe('App', () => {
         await transcript.findByText('first');
         await user.type(screen.getByRole('textbox', { name: 'Message' }), 'two{Enter}');
 
-        expect(await transcript.findByText(/Enter them again in the connection settings/)).toBeInTheDocument();
+        expect(await transcript.findByText(/Enter the credentials again in the connection settings/)).toBeInTheDocument();
         expect(screen.getByLabelText('Value')).toHaveAttribute('placeholder', 'Enter it again');
         expect(fetch.mock.calls.filter(([u]) => u === '/api/connections')).toHaveLength(1);
 
@@ -894,6 +894,167 @@ describe('App', () => {
       expect(section.getByText("The card doesn't declare capabilities.extendedAgentCard.")).toBeInTheDocument();
       await user.click(section.getByRole('button', { name: 'Wire traffic' }));
       expect(screen.getByRole('tab', { name: 'Traffic' })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  describe('AI Catalogs', () => {
+    const body = (fetch: ReturnType<typeof mockApi>, url: string, n = 0) =>
+      JSON.parse(String(fetch.mock.calls.filter(([u]) => u === url)[n]?.[1]?.body)) as Record<string, unknown>;
+    const count = (fetch: ReturnType<typeof mockApi>, url: string) => fetch.mock.calls.filter(([u]) => u === url).length;
+    const panel = () => within(screen.getByRole('navigation', { name: 'Agents' }));
+    const listed = (agents: CatalogAgent[], extra: Partial<CatalogResolveResponse> = {}): CatalogResolveResponse => ({
+      catalogUrl: 'https://example.com/.well-known/ai-catalog.json',
+      agents,
+      skipped: 2,
+      call: { latencyMs: 5, error: null },
+      ...extra,
+    });
+    const extensionKey = 'com.github.a2aproject.inspector';
+
+    it('keeps agents across page loads and fetches a saved card when it is selected', async () => {
+      const fetch = mockApi({ '/api/config': () => json(config), '/api/card:resolve': () => json(resolved) });
+      const user = userEvent.setup();
+      const { unmount } = render(<App />);
+      await user.type(await screen.findByLabelText('Agent card URL'), 'localhost:9999');
+      await user.click(addAgentButton());
+      await screen.findByRole('heading', { name: 'Echo Agent' });
+      const saved = JSON.parse(localStorage.getItem('a2a-inspector.agents') ?? '{}') as { entries: { url: string; extensions: Record<string, unknown> }[] };
+      expect(saved.entries).toMatchObject([{ url: resolved.cardUrl, extensions: { [extensionKey]: { name: 'Echo Agent' } } }]);
+
+      unmount();
+      render(<App />);
+      await screen.findByRole('navigation', { name: 'Agents' });
+      const agent = await panel().findByRole('button', { name: /^Echo Agent/ });
+      expect(within(agent).getByText('Not fetched yet')).toBeInTheDocument();
+      expect(count(fetch, '/api/card:resolve')).toBe(1);
+
+      await user.click(agent);
+      expect(await screen.findByRole('heading', { name: 'Echo Agent' })).toBeInTheDocument();
+      expect(count(fetch, '/api/card:resolve')).toBe(2);
+      expect(body(fetch, '/api/card:resolve', 1)).toEqual({ url: resolved.cardUrl });
+    });
+
+    it('lists the agents of a catalog with its credentials, and adds one or all of them', async () => {
+      const inline = { name: 'Inline', supportedInterfaces: [] };
+      const fetch = mockApi({
+        '/api/config': () => json(config),
+        '/api/catalog:resolve': () =>
+          json(
+            listed([
+              { identifier: 'urn:air:example.com:a2a:echo', cardUrl: resolved.cardUrl },
+              { identifier: 'urn:air:example.com:a2a:inline', displayName: 'Inline agent', card: inline },
+              { identifier: 'urn:air:example.com:a2a:other', cardUrl: 'https://other.example.com/card.json' },
+            ]),
+          ),
+        '/api/card:resolve': () => json(resolved),
+        '/api/card:validate': () => json({ protocolVersion: '1.0', versions: ['1.0'], validation: { findings: [] }, interfaces: [], defaultInterface: null }),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByText('Add from an AI Catalog'));
+      await user.click(screen.getByText('Credentials'));
+      await user.selectOptions(panel().getByLabelText('Auth'), 'bearer');
+      await user.type(panel().getByLabelText('Value'), 'catalog-token');
+      await user.type(screen.getByLabelText('AI Catalog URL'), 'example.com');
+      await user.click(panel().getByRole('button', { name: 'List' }));
+
+      const results = within(await screen.findByRole('region', { name: 'From catalog' }));
+      expect(await results.findByText('3 agents')).toBeInTheDocument();
+      expect(results.getByText(/2 other entries skipped/)).toBeInTheDocument();
+      expect(body(fetch, '/api/catalog:resolve')).toEqual({ url: 'example.com', auth: { bearer: { value: 'catalog-token' } } });
+
+      // An agent added by itself is fetched right away.
+      await user.click(results.getByRole('button', { name: 'Add echo' }));
+      expect(await screen.findByRole('heading', { name: 'Echo Agent' })).toBeInTheDocument();
+      expect(results.getByRole('button', { name: 'echo is added' })).toBeDisabled();
+
+      // The others wait until they're selected.
+      await user.click(results.getByRole('button', { name: 'Add all' }));
+      expect(count(fetch, '/api/card:resolve')).toBe(1);
+      const inlineAgent = panel().getByRole('button', { name: /^Inline agent(?! is added)/ });
+      expect(within(inlineAgent).getByText('Card in the catalog')).toBeInTheDocument();
+      expect(within(inlineAgent).getByText('Not fetched yet')).toBeInTheDocument();
+      expect(results.getByRole('button', { name: 'Add all' })).toBeDisabled();
+
+      await user.click(inlineAgent);
+      expect(await screen.findByText('urn:air:example.com:a2a:inline')).toBeInTheDocument();
+      expect(body(fetch, '/api/card:validate')).toEqual({ card: inline });
+    });
+
+    it('says when a catalog needs credentials', async () => {
+      mockApi({
+        '/api/config': () => json(config),
+        '/api/catalog:resolve': () => json(listed([], { call: { latencyMs: 3, error: { message: 'The server answered 401 Unauthorized.', code: 401 } } })),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(await screen.findByText('Add from an AI Catalog'));
+      await user.type(screen.getByLabelText('AI Catalog URL'), 'example.com');
+      await user.click(panel().getByRole('button', { name: 'List' }));
+      const alert = await within(screen.getByRole('region', { name: 'From catalog' })).findByRole('alert');
+      expect(alert).toHaveTextContent('The server answered 401 Unauthorized.');
+      expect(alert).toHaveTextContent('The catalog needs credentials.');
+    });
+
+    it('imports a catalog file and exports the agents', async () => {
+      const doc = { specVersion: '1.0', entries: [{ identifier: 'a', type: 'application/a2a-agent-card+json', url: 'https://a.example.com' }] };
+      const fetch = mockApi({
+        '/api/config': () => json(config),
+        '/api/catalog:resolve': () =>
+          json(listed([{ identifier: 'a', cardUrl: 'https://a.example.com/.well-known/agent-card.json', inspector: { name: 'Agent A' } }], { skipped: 1 })),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await user.upload(await screen.findByLabelText('AI Catalog file to import'), new File([JSON.stringify(doc)], 'agents.json', { type: 'application/json' }));
+
+      expect(await panel().findByText('Imported 1 agent from agents.json. 1 other entry skipped.')).toBeInTheDocument();
+      expect(body(fetch, '/api/catalog:resolve')).toEqual({ catalog: doc });
+      expect(within(panel().getByRole('button', { name: /^Agent A/ })).getByText('Not fetched yet')).toBeInTheDocument();
+
+      const blobs: Blob[] = [];
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: (blob: Blob) => (blobs.push(blob), 'blob:catalog') });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+      let downloaded = '';
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+        downloaded = this.download;
+      });
+      await user.click(panel().getByRole('button', { name: 'Export' }));
+      expect(downloaded).toBe('ai-catalog.json');
+      expect(JSON.parse(await blobs[0]!.text())).toEqual({
+        specVersion: '1.0',
+        entries: [
+          {
+            identifier: 'a',
+            type: 'application/a2a-agent-card+json',
+            url: 'https://a.example.com/.well-known/agent-card.json',
+            extensions: { [extensionKey]: { name: 'Agent A' } },
+          },
+        ],
+      });
+    });
+
+    it('shows the shared catalog, whose agents cannot be removed', async () => {
+      localStorage.setItem(
+        'a2a-inspector.agents',
+        JSON.stringify({
+          specVersion: '1.0',
+          entries: [
+            { identifier: 'old', type: 'application/a2a-agent-card+json', url: 'https://old.example.com/card.json', extensions: { [extensionKey]: { name: 'Old shared', shared: true } } },
+            { identifier: 'own', type: 'application/a2a-agent-card+json', url: 'https://own.example.com/card.json', extensions: { [extensionKey]: { name: 'Own agent' } } },
+          ],
+        }),
+      );
+      mockApi({
+        '/api/config': () => json({ ...config, features: { ...config.features, sharedCatalog: true } }),
+        '/api/catalog': () => json({ agents: [{ identifier: 'team', displayName: 'Team echo', cardUrl: resolved.cardUrl }], skipped: 0 }),
+      });
+      render(<App />);
+      await screen.findByRole('navigation', { name: 'Agents' });
+      const shared = await panel().findByRole('button', { name: /^Team echo/ });
+      expect(within(shared).getByText('shared')).toBeInTheDocument();
+      expect(panel().queryByRole('button', { name: 'Remove Team echo' })).not.toBeInTheDocument();
+      expect(panel().getByRole('button', { name: 'Remove Own agent' })).toBeInTheDocument();
+      expect(panel().queryByText('Old shared')).not.toBeInTheDocument();
     });
   });
 });

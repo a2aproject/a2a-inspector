@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type AgentsState, agentsReducer, findAgent, initialAgentsState } from './agents';
+import { type AgentEntry, type AgentsState, agentName, agentsReducer, createAgent, findAgent, initialAgentsState } from './agents';
 import type { AgentInterface, CardResolveResponse } from './api/types';
 import { defaultSettings } from './settings';
 
@@ -175,5 +175,76 @@ describe('findAgent', () => {
 
     const again = agentsReducer(state, { type: 'connected', id: 'a', connection: { ...connection, id: 'conn-2' }, key: 'k', settings });
     expect(again.agents[0]!.resume).toBeUndefined();
+  });
+});
+
+describe('saved and catalog agents', () => {
+  const saved = (id: string, init: Partial<AgentEntry> = {}) => createAgent(id, { kind: 'card', url: cardUrl, ...init });
+
+  it('adds entries that are not in the list yet, matching cards by URL and cards in entries by identifier', () => {
+    const state = run(
+      { type: 'add', id: 'a', url: 'localhost:9999' },
+      { type: 'resolved', id: 'a', result: resolved('Echo') },
+      {
+        type: 'addEntries',
+        entries: [
+          saved('b'),
+          saved('c', { url: '', identifier: 'urn:x', card: { name: 'Inline' } }),
+          saved('d', { url: '', identifier: 'urn:x', card: { name: 'Inline again' } }),
+          saved('e', { url: 'https://other.example.com/card.json' }),
+        ],
+        select: 'b',
+      },
+    );
+    expect(state.agents.map((a) => a.id)).toEqual(['a', 'c', 'e']);
+    expect(state.agents[1]).toMatchObject({ status: 'idle', card: { name: 'Inline' } });
+    // Selecting a duplicate selects the agent already in the list.
+    expect(state.selectedId).toBe('a');
+  });
+
+  it('applies the shared catalog: marks agents in the list, adds others, and drops shared agents it no longer lists', () => {
+    const state = run(
+      { type: 'addEntries', entries: [saved('a'), saved('gone', { url: 'https://gone.example.com/card.json', shared: true }), saved('own', { url: 'https://own.example.com/card.json' })] },
+      { type: 'select', id: 'gone' },
+      { type: 'shared', entries: [saved('x', { shared: true }), saved('y', { url: 'https://new.example.com/card.json', shared: true })] },
+    );
+    expect(state.agents.map((a) => [a.id, !!a.shared])).toEqual([
+      ['a', true],
+      ['own', false],
+      ['y', true],
+    ]);
+    expect(state.selectedId).toBeNull();
+    expect(agentsReducer(state, { type: 'remove', id: 'a' }).agents).toHaveLength(3);
+  });
+
+  it('merges an agent typed by hand into a saved one with the same card, and picks the saved interface', () => {
+    const state = run(
+      { type: 'addEntries', entries: [saved('s', { savedInterface: iface('GRPC'), settings: { ...defaultSettings, tenant: 'acme' } })] },
+      { type: 'add', id: 'typed', url: 'localhost:9999' },
+      { type: 'resolved', id: 'typed', result: resolved('Echo') },
+    );
+    expect(state.agents).toHaveLength(1);
+    expect(state.agents[0]).toMatchObject({ id: 's', status: 'done', selectedInterface: 1, settings: { tenant: 'acme' } });
+    expect(state.agents[0]!.savedInterface).toBeUndefined();
+    expect(state.selectedId).toBe('s');
+  });
+
+  it('selects a saved endpoint again instead of adding it twice', () => {
+    const endpoint = { ...iface('JSONRPC'), source: 'custom' };
+    const state = run(
+      { type: 'addEntries', entries: [createAgent('e', { kind: 'endpoint', url: endpoint.url, status: 'done', customInterfaces: [endpoint], selectedInterface: 0 })] },
+      { type: 'addEndpoint', id: 'again', iface: endpoint },
+    );
+    expect(state.agents.map((a) => a.id)).toEqual(['e']);
+    expect(state.selectedId).toBe('e');
+  });
+
+  it('names agents by the catalog entry, the card, the saved name or the URL', () => {
+    expect(agentName(saved('a', { displayName: 'Entry name', result: resolved('Card name') }))).toBe('Entry name');
+    expect(agentName(saved('a', { savedName: 'Saved', result: resolved('Card name') }))).toBe('Card name');
+    expect(agentName(saved('a', { savedName: 'Saved' }))).toBe('Saved');
+    expect(agentName(saved('a', { identifier: 'urn:air:example.com:a2a:research' }))).toBe('research');
+    expect(agentName(saved('a', { identifier: cardUrl }))).toBe(cardUrl);
+    expect(agentName(saved('a'))).toBe(cardUrl);
   });
 });
