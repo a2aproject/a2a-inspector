@@ -1,6 +1,8 @@
 import { type Completion, CompletionContext, completionStatus } from '@codemirror/autocomplete';
+import { undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
+import { cardSchemas } from '../a2a/card-schemas.gen';
 import { cardEditorState, completeCard } from './cardEditor';
 import { describe as describePath, objectTemplate, schemasAt, valuesAt } from './schema';
 
@@ -27,6 +29,9 @@ function accept(text: string, typed: string, label: string, version: '1.0' | '0.
   const apply = option?.apply as (view: EditorView, completion: Completion, from: number, to: number) => void;
   apply(view, option!, result!.from, pos + typed.length);
   const out = view.state.doc.toString();
+  // A single undo takes the whole completion back.
+  undo(view);
+  expect(view.state.doc.toString()).toBe(text.slice(0, pos) + typed + text.slice(pos + 1));
   view.destroy();
   return out;
 }
@@ -58,6 +63,7 @@ describe('completeCard', () => {
   it('applies a suggestion over what was typed after the list opened', () => {
     expect(accept('{\n  "|"\n}', 'sup', 'supportedInterfaces')).toBe('{\n  "supportedInterfaces": []\n}');
     expect(accept('{\n  "|"\n  "name": "x"\n}', 'ver', 'version')).toBe('{\n  "version": "",\n  "name": "x"\n}');
+    expect(accept('{"name": "x"\n  "|"}', 'ver', 'version')).toBe('{"name": "x",\n  "version": ""}');
     expect(accept('{"supportedInterfaces": [{"protocolBinding": "|"}]}', 'JS', 'JSONRPC')).toBe('{"supportedInterfaces": [{"protocolBinding": "JSONRPC"}]}');
     expect(accept('{"capabilities": {"streaming": t|}}', 'r', 'true')).toBe('{"capabilities": {"streaming": true}}');
   });
@@ -79,6 +85,22 @@ describe('completeCard', () => {
     expect(accept('{"securitySchemes": {"bearer": {}}, "securityRequirements": [{"schemes": {"|"}}]}', 'be', 'bearer')).toBe(
       '{"securitySchemes": {"bearer": {}}, "securityRequirements": [{"schemes": {"bearer": {\n  "list": []\n}}}]}',
     );
+  });
+
+  it('inserts names as they are, even ones that look like snippet fields', () => {
+    expect(accept('{"securitySchemes": {"a${b}|"}}', '', 'a${b}')).toBe('{"securitySchemes": {"a${b}": {}}}');
+  });
+
+  it('builds snippets from schema names and values without braces, so they need no escaping', () => {
+    const inserted: string[] = [];
+    JSON.stringify(cardSchemas, (key, value: unknown) => {
+      if (key === 'properties' && value && typeof value === 'object') inserted.push(...Object.keys(value));
+      if ((key === 'enum' || key === 'examples') && Array.isArray(value)) inserted.push(...value.map(String));
+      if (key === 'const' || key === 'default') inserted.push(String(value));
+      return value;
+    });
+    expect(inserted.length).toBeGreaterThan(100);
+    expect(inserted.filter((s) => /[{}]/.test(s))).toEqual([]);
   });
 
   it('fills in the required fields of a new object', () => {

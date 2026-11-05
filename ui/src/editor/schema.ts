@@ -117,14 +117,12 @@ function knownValues(version: ProtocolVersion, path: JSONPath): string[] {
 
 export interface ValueOption {
   label: string;
-  /** A snippet: ${} marks where the cursor goes, and a tab indents a line one level. */
+  /**
+   * A snippet: ${} marks where the cursor goes, and a tab indents a line one level. Snippets are
+   * built from the schema only, whose names and values have no braces to escape.
+   */
   template: string;
   detail?: string;
-}
-
-/** Text for a snippet, with the braces that would start a field escaped. */
-export function snippetText(text: string): string {
-  return text.replace(/[{}]/g, '\\$&');
 }
 
 /** Indents the lines of a nested snippet one more level. */
@@ -138,13 +136,13 @@ export function objectTemplate(version: ProtocolVersion, r: Resolved, depth = 0)
   const props = r.schema.properties ?? {};
   const names = r.schema.required?.length ? r.schema.required : Object.keys(props).length === 1 ? Object.keys(props) : [];
   if (!names.length || depth > 2) return '{${}}';
-  const lines = names.map((name) => `\t${snippetText(JSON.stringify(name))}: ${nested(valueTemplate(version, deref(roots[version], props[name] ?? {}), depth + 1))}`);
+  const lines = names.map((name) => `\t${JSON.stringify(name)}: ${nested(valueTemplate(version, deref(roots[version], props[name] ?? {}), depth + 1))}`);
   return `{\n${lines.join(',\n')}\n}`;
 }
 
 /** A new value of the schema's type, with the cursor where it's filled in; a constant is filled in already. */
 export function valueTemplate(version: ProtocolVersion, r: Resolved, depth = 0): string {
-  if (r.schema.const !== undefined) return snippetText(JSON.stringify(r.schema.const));
+  if (r.schema.const !== undefined) return JSON.stringify(r.schema.const);
   const t = types(r.schema);
   if (t.includes('string')) return '"${}"';
   if (t.includes('array')) return '[${}]';
@@ -191,7 +189,7 @@ export function entryKindsAt(version: ProtocolVersion, path: JSONPath): EntryKin
     name: key.slice(0, key.length - suffix.length),
     type: typeLabel(version, r),
     description: r.schema.description,
-    template: `{\n\t${snippetText(JSON.stringify(key))}: ${nested(objectTemplate(version, r))}\n}`,
+    template: `{\n\t${JSON.stringify(key)}: ${nested(objectTemplate(version, r))}\n}`,
   }));
 }
 
@@ -217,7 +215,7 @@ export function valuesAt(version: ProtocolVersion, path: JSONPath): ValueOption[
   // Strings are labeled without their quotes: CodeMirror matches a single typed character against
   // a label's first character, so "G" would never find "GRPC" with its quote in front.
   const literal = (v: unknown, detail?: string) =>
-    add({ label: typeof v === 'string' ? v : JSON.stringify(v), template: snippetText(JSON.stringify(v)), detail });
+    add({ label: typeof v === 'string' ? v : JSON.stringify(v), template: JSON.stringify(v), detail });
   for (const r of schemasAt(version, path)) {
     const s = r.schema;
     for (const v of s.enum ?? []) literal(v);

@@ -6,6 +6,7 @@ import {
   type CompletionContext,
   type CompletionResult,
   completionKeymap,
+  pickedCompletion,
   snippet,
   startCompletion,
 } from '@codemirror/autocomplete';
@@ -19,7 +20,7 @@ import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutt
 import { tags } from '@lezer/highlight';
 import type { Finding, ProtocolVersion, Severity } from '../api/types';
 import { formatPath, locate, type Spot, spanAt, spans, spotAt } from './jsonScan';
-import { describe, entryKindsAt, mapValuesAt, namesSchemes, propertiesAt, snippetText, typeLabel, valuesAt, valueTemplate } from './schema';
+import { describe, entryKindsAt, mapValuesAt, namesSchemes, propertiesAt, typeLabel, valuesAt, valueTemplate } from './schema';
 
 /** The card version whose schema the suggestions and documentation come from. */
 const versionFacet = Facet.define<ProtocolVersion, ProtocolVersion>({ combine: (values) => values[0] ?? '1.0' });
@@ -169,23 +170,30 @@ function info(text: string | undefined): Completion['info'] {
 }
 
 /**
- * Applies a completion's snippet over the whole token at the cursor, adding a comma before it if
- * one is missing. The token is read when the completion is applied: the list stays open while
+ * Applies a completion over the whole token at the cursor, adding a comma before it if one is
+ * missing: text as it is, such as a key the user named, then a snippet from the schema, whose
+ * ${} fields the cursor moves through. Only the snippet goes through the snippet syntax, so names
+ * need no escaping. The token is read when the completion is applied: the list stays open while
  * the user types, so it can be from before the last few characters.
  */
-function applySnippet(build: (after: string) => { template: string; reopen?: boolean }) {
+function applySnippet(build: (after: string) => { text?: string; template?: string; reopen?: boolean }) {
   return (view: EditorView, completion: Completion) => {
     const doc = view.state.doc.toString();
     const spot = spotAt(doc, view.state.selection.main.head);
     if (!spot) return;
-    const { template, reopen } = build(doc.slice(spot.to));
-    let { from, to } = spot;
-    if (spot.comma !== undefined) {
-      view.dispatch({ changes: { from: spot.comma, insert: ',' } });
-      from++;
-      to++;
+    const { text = '', template, reopen } = build(doc.slice(spot.to));
+    const { from, to, comma } = spot;
+    if (!text && comma === undefined) {
+      if (template) snippet(template)(view, completion, from, to);
+    } else {
+      const changes = [{ from, to, insert: text }];
+      if (comma !== undefined) changes.unshift({ from: comma, to: comma, insert: ',' });
+      const end = from + (comma !== undefined ? 1 : 0) + text.length;
+      view.dispatch({ changes, selection: { anchor: end }, userEvent: 'input.complete', annotations: pickedCompletion.of(completion) });
+      // Without a completion, the snippet's edit has no user event, so the history joins it to the
+      // one above and a single undo takes back the whole completion.
+      if (template) snippet(template)(view, null, end, end);
     }
-    snippet(template)(view, completion, from, to);
     // A property whose value has suggestions of its own gets them right away.
     if (reopen) startCompletion(view);
   };
@@ -196,10 +204,10 @@ const commaBefore = (after: string) => (/^\s*"/.test(after) ? ',' : '');
 
 /** A new property: its key, and its value unless the key being typed is a renamed one. */
 function property(name: string, value: string, reopen = false) {
-  const key = snippetText(JSON.stringify(name));
+  const key = JSON.stringify(name);
   return applySnippet((after) =>
     // Renaming a key keeps its value.
-    /^\s*:/.test(after) ? { template: key } : { template: `${key}: ${value}${commaBefore(after)}`, reopen },
+    /^\s*:/.test(after) ? { text: key } : { text: `${key}: `, template: value + commaBefore(after), reopen },
   );
 }
 
