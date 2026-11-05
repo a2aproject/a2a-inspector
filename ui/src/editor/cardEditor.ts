@@ -14,7 +14,7 @@ import { json, jsonParseLinter } from '@codemirror/lang-json';
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
 import { type Diagnostic, lintGutter, lintKeymap, setDiagnostics } from '@codemirror/lint';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
-import { Compartment, EditorState, type Extension, Facet } from '@codemirror/state';
+import { Compartment, EditorState, type Extension, Facet, Prec } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, hoverTooltip, keymap, lineNumbers } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import type { Finding, ProtocolVersion, Severity } from '../api/types';
@@ -312,6 +312,23 @@ const schemaHover = hoverTooltip((view, pos) => {
   };
 });
 
+/**
+ * Option+Space suggests too, since macOS often takes Ctrl+Space for Spotlight or the input source.
+ * It's matched by the physical key: with Option, the key types a non-breaking space, and
+ * CodeMirror's own Option bindings on macOS (Option+I, Option+`) are dead keys on common layouts.
+ */
+const suggestKey = Prec.highest(
+  keymap.of([
+    {
+      any: (view, event) => {
+        if (event.type !== 'keydown' || event.code !== 'Space' || !event.altKey || event.ctrlKey || event.metaKey) return false;
+        startCompletion(view);
+        return true;
+      },
+    },
+  ]),
+);
+
 export interface EditorOptions {
   doc: string;
   version: ProtocolVersion;
@@ -333,6 +350,7 @@ export function cardEditorState({ doc, version, label, onChange }: EditorOptions
     bracketMatching(),
     closeBrackets(),
     autocompletion({ override: [completeCard], icons: false }),
+    suggestKey,
     highlightActiveLine(),
     highlightSelectionMatches(),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap, indentWithTab]),

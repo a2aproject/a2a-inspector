@@ -1,4 +1,4 @@
-import { type Completion, CompletionContext } from '@codemirror/autocomplete';
+import { type Completion, CompletionContext, completionStatus } from '@codemirror/autocomplete';
 import { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
 import { cardEditorState, completeCard } from './cardEditor';
@@ -83,6 +83,18 @@ describe('completeCard', () => {
 
   it('fills in the required fields of a new object', () => {
     expect(accept('{"|"}', 'prov', 'provider')).toBe('{"provider": {\n  "url": "",\n  "organization": ""\n}}');
+  });
+
+  it('opens suggestions with Option+Space, by the physical key', () => {
+    const view = new EditorView({ parent: document.body, state: cardEditorState({ doc: '{}', version: '1.0', label: 'Card', onChange: () => undefined }) });
+    view.dispatch({ selection: { anchor: 1 } });
+    const press = (init: KeyboardEventInit) => view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+    press({ key: ' ', code: 'Space' });
+    expect(completionStatus(view.state)).toBeNull();
+    // With Option, macOS types a non-breaking space.
+    press({ key: '\u00a0', code: 'Space', altKey: true });
+    expect(completionStatus(view.state)).not.toBeNull();
+    view.destroy();
   });
 
   it('stays quiet until there is something to complete or the user asks', () => {

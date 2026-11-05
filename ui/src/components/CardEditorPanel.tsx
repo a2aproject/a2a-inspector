@@ -23,6 +23,9 @@ const serveChoices: (ServedInterface & { label: string })[] = [
   { protocolBinding: 'GRPC', protocolVersion: '0.3', label: 'gRPC, v0.3' },
 ];
 
+// macOS often takes Ctrl+Space for itself.
+const suggestKeys = navigator.userAgent.includes('Mac') ? '⌥Space or Ctrl+Space' : 'Ctrl+Space';
+
 const choiceKey = (i: ServedInterface) => `${i.protocolBinding} ${i.protocolVersion}`;
 
 type Parsed = { ok: true; card: unknown } | { ok: false; error: string };
@@ -174,7 +177,9 @@ export function CardEditorPanel({ agent, draft, serve, echoes, onChange, onSave,
       </div>
 
       <CardEditor ref={editor} value={text} version={version} findings={findings} findingsFor={checked?.text} label="Agent card JSON" onChange={onChange} />
-      <p className="help">Ctrl+Space suggests fields and values from the v{version} card schema; rest the pointer on a field for its documentation.</p>
+      <p className="help">
+        {suggestKeys} suggests fields and values from the v{version} card schema; rest the pointer on a field for its documentation.
+      </p>
       {!parsed.ok && <p className="small error-text">{parsed.error}</p>}
       {checked?.error && (
         <p role="alert" className="small error-text">

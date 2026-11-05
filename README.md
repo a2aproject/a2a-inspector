@@ -78,7 +78,7 @@ The inspector saves the agents you add in the browser, as an [AI Catalog](https:
 
 ## Writing and serving cards
 
-**New card** opens a v1.0 card template in the editor, and **Edit card** opens one you wrote before; for a card fetched from an agent, **Edit a copy** starts from it. Ctrl+Space suggests the fields and values the card's version allows, the pointer resting on a field shows its documentation, and the inspector's findings appear in place as you type. Cards are saved with your agents, as catalog entries that hold the card.
+**New card** opens a v1.0 card template in the editor, and **Edit card** opens one you wrote before; for a card fetched from an agent, **Edit a copy** starts from it. Ctrl+Space, or ⌥Space on a Mac, suggests the fields and values the card's version allows, the pointer resting on a field shows its documentation, and the inspector's findings appear in place as you type. Cards are saved with your agents, as catalog entries that hold the card.
 
 **Serve** runs the card as an echo agent on this machine and opens it: the agent answers every message with the message's text, so you can try the card with the rest of the inspector. The inspector has no serving code of its own: it starts [a2a-cli](https://github.com/a2aproject/a2a-cli) as `a2a server --card <file> --echo` on a free `127.0.0.1` port, with `a2a` or `a2a-cli` from the `PATH`, and stops it when you do or when the inspector exits. The card it serves has a single interface, on that port, with the binding and version you pick in place of the card's. Echo agents are listed above the saved agents while the inspector runs them. With `--egress=public`, Serve needs `--egress-allow 127.0.0.1`, since echo agents listen on loopback. A shared instance has no Serve.
 
