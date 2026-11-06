@@ -23,8 +23,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # main is published as latest, and a release as its tag, such as v1.0.0.
+      - name: Pick the image tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push Docker image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           push: true
-          tags: ghcr.io/a2aproject/a2a-inspector:latest
+          tags: ghcr.io/a2aproject/a2a-inspector:${{ steps.tag.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.tag.outputs.version }}
+            COMMIT=${{ github.sha }}
