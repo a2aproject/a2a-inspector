@@ -30,11 +30,17 @@ Built on [A2A Protocol v1.0](https://a2a-protocol.org/v1.0.0/specification/), an
 
 ## Installation
 
+**Binaries**
+
+Download the archive for Linux, macOS or Windows from the [releases](https://github.com/a2aproject/a2a-inspector/releases), check it against `checksums.txt`, and put `a2a-inspector` on your `PATH`. `a2a-inspector --version` prints the version.
+
 **From source** (Go 1.26.10 or later)
 
+<!-- x-release-please-start-version -->
 ```bash
-go install github.com/a2aproject/a2a-inspector@latest
+go install github.com/a2aproject/a2a-inspector@v0.2.0
 ```
+<!-- x-release-please-end -->
 
 Or run it from a clone of this repository with `go run .`.
 
@@ -44,7 +50,7 @@ Or run it from a clone of this repository with `go run .`.
 docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/a2aproject/a2a-inspector
 ```
 
-Arguments after the image name go to the inspector, such as `-a <agent card URL>`. Inside the container, `localhost` is the container itself: reach an agent on your machine at `host.docker.internal` (on Linux, add `--add-host host.docker.internal:host-gateway`). To build the image yourself, run `docker build -t a2a-inspector .`.
+The `latest` image is built from `main`, and each release also has an image tagged with its version, such as `ghcr.io/a2aproject/a2a-inspector:v1.2.3`. Arguments after the image name go to the inspector, such as `-a <agent card URL>`. Inside the container, `localhost` is the container itself: reach an agent on your machine at `host.docker.internal` (on Linux, add `--add-host host.docker.internal:host-gateway`). To build the image yourself, run `docker build -t a2a-inspector .`.
 
 ## Usage
 

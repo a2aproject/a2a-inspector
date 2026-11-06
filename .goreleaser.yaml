@@ -1,0 +1,132 @@
+# GoReleaser configuration for a2a-inspector.
+# Docs: https://goreleaser.com
+#
+# Releases are cut by release-please, which creates the git tag and the GitHub
+# Release (with the changelog). This config cross-compiles the binary,
+# uploads the archives and checksums to that release, and opens pull requests
+# for the Homebrew formula and the winget manifest. The UI is embedded from
+# the committed ui/dist, which CI checks against the UI sources.
+version: 2
+
+project_name: a2a-inspector
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: a2a-inspector
+    main: .
+    binary: a2a-inspector
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/a2aproject/a2a-inspector/inspector.version={{ .Version }}
+      - -X github.com/a2aproject/a2a-inspector/inspector.commit={{ .FullCommit }}
+      - -X github.com/a2aproject/a2a-inspector/inspector.date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: a2a-inspector
+    ids:
+      - a2a-inspector
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# The formula lives next to the a2a CLI's, in the a2aproject/a2a-cli tap.
+# The repository isn't named homebrew-a2a-cli, so users tap it by URL first.
+# Prereleases skip it.
+brews:
+  - name: a2a-inspector
+    ids:
+      - a2a-inspector
+    homepage: "https://github.com/a2aproject/a2a-inspector"
+    description: "Inspect, debug and test A2A agents in the browser."
+    license: "Apache-2.0"
+    directory: Formula
+    skip_upload: "auto"
+    commit_msg_template: "release: update Homebrew formula for a2a-inspector {{ .Tag }}"
+    install: |
+      bin.install "a2a-inspector"
+    test: |
+      system "#{bin}/a2a-inspector", "--version"
+    repository:
+      owner: a2aproject
+      name: a2a-cli
+      branch: "homebrew/a2a-inspector-{{ .Version }}"
+      token: "{{ .Env.A2A_BOT_PAT }}"
+      pull_request:
+        enabled: true
+
+# a2a-inspector builds for Windows, but nobody has run it there yet. The
+# manifest is generated with every release and published once someone has:
+# set skip_upload to auto.
+winget:
+  - name: a2a-inspector
+    package_identifier: a2aproject.a2ainspector
+    publisher: a2aproject
+    publisher_url: "https://github.com/a2aproject"
+    publisher_support_url: "https://github.com/a2aproject/a2a-inspector/issues"
+    author: "The A2A Authors"
+    homepage: "https://github.com/a2aproject/a2a-inspector"
+    short_description: "Inspect, debug and test A2A agents in the browser."
+    description: "A web UI for inspecting, debugging and testing A2A (Agent2Agent) agents, served by a single binary."
+    license: "Apache-2.0"
+    license_url: "https://github.com/a2aproject/a2a-inspector/blob/{{ .Tag }}/LICENSE"
+    copyright: "The A2A Authors"
+    release_notes_url: "https://github.com/a2aproject/a2a-inspector/releases/tag/{{ .Tag }}"
+    ids:
+      - a2a-inspector
+    tags:
+      - a2a
+      - agent
+      - inspector
+      - debugging
+    skip_upload: true
+    commit_msg_template: "release: add a2a-inspector {{ .Version }} winget manifest"
+    repository:
+      owner: a2aproject
+      name: winget-pkgs
+      branch: "a2a-inspector-{{ .Version }}"
+      token: "{{ .Env.A2A_BOT_PAT }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# release-please owns the release notes.
+changelog:
+  disable: true
+
+release:
+  # Only attach binaries to the release release-please created.
+  mode: keep-existing
+  # GoReleaser sets the release's prerelease flag when it updates it, so a
+  # tag such as v1.0.0-alpha.1 has to keep the prerelease release-please made.
+  prerelease: auto

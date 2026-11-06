@@ -90,6 +90,7 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 		Long: "a2a-inspector serves a web UI for inspecting, debugging and testing A2A agents, and opens it in the browser.\n" +
 			"It listens on 127.0.0.1 and protects its API with a token in the URL it prints.",
 		Args:          cobra.NoArgs,
+		Version:       versionText(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -98,6 +99,8 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 			return run(cmd.Context(), opts, f, stdout, stderr, open)
 		},
 	}
+	cmd.SetVersionTemplate("{{.Name}} {{.Version}}")
+	cmd.SetOut(stdout)
 	fs := cmd.Flags()
 	fs.StringVarP(&f.agentCard, "agent-card", "a", "", "Agent Card to open on start: host/origin or full card URL")
 	fs.StringVarP(&f.endpoint, "endpoint", "e", "", "Agent interface URL to open on start without a card; requires a single --transport flag")

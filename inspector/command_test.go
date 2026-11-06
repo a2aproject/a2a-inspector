@@ -237,6 +237,20 @@ func TestFlagErrors(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	defer func(v, c string) { version, commit = v, c }(version, commit)
+	version, commit = "1.2.3", "abc"
+	out := &syncBuffer{}
+	cmd := newCommand(Options{}, out, &syncBuffer{}, nil)
+	cmd.SetArgs([]string{"--version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.HasPrefix(got, "a2a-inspector 1.2.3\ncommit:  abc\n") {
+		t.Errorf("--version printed %q", got)
+	}
+}
+
 func TestCatalogFlag(t *testing.T) {
 	for _, f := range []flags{{catalog: "agents.json"}, {hosted: true, catalog: "agents.json"}} {
 		if so, err := serverOptions(Options{}, f); err != nil || so.Catalog != "agents.json" {

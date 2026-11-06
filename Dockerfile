@@ -16,7 +16,10 @@ COPY inspector/ inspector/
 COPY internal/ internal/
 COPY ui/embed.go ui/
 COPY --from=ui /src/ui/dist ui/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /a2a-inspector .
+ARG VERSION=dev
+ARG COMMIT=none
+RUN CGO_ENABLED=0 go build -trimpath -o /a2a-inspector \
+    -ldflags="-s -w -X github.com/a2aproject/a2a-inspector/inspector.version=${VERSION} -X github.com/a2aproject/a2a-inspector/inspector.commit=${COMMIT}" .
 
 # Stage 3: run it.
 FROM gcr.io/distroless/static-debian12:nonroot

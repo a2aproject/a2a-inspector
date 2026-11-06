@@ -14,6 +14,7 @@ LICENSE
 # Build output; the image builds its own
 ui/dist
 /a2a-inspector
+/dist
 
 # Node
 **/node_modules
@@ -32,7 +33,10 @@ ui/src/test
 
 # Tooling the image build doesn't use
 .golangci.yml
+.goreleaser.yaml
 .pre-commit-config.yaml
+.release-please-manifest.json
+release-please-config.json
 scripts
 ui/scripts
 ui/eslint.config.js
