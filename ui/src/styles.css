@@ -1292,6 +1292,18 @@ input[type='file']:hover::file-selector-button {
   padding-left: 10px;
   margin-top: 8px;
 }
+/* A delegation of the host agent: set off from its answers, with the agent's results nested. */
+.delegation {
+  background: var(--bg-subtle);
+  margin-right: 6%;
+}
+.delegation-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
 .composer {
   flex: none;
   max-height: 60%;
@@ -1573,4 +1585,34 @@ pre.command {
 }
 .list-heading + .agent-list {
   margin-top: 6px;
+}
+
+/* Host agent */
+
+.host-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.host-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.host-agents li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.host-agents input {
+  margin-top: 3px;
+}
+
+.host-agents p {
+  margin: 2px 0 0;
 }

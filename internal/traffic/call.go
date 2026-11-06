@@ -24,6 +24,8 @@ import (
 // with WithCall; the recording transport and interceptors pick it up.
 type Call struct {
 	ConnectionID string
+	// Origin is OriginHost for the host agent's calls, and empty for the user's.
+	Origin string
 	// Secrets are values masked wherever they appear in headers or metadata.
 	Secrets []string
 	// Headers are the names of the headers the user configured for the
@@ -44,6 +46,9 @@ type Call struct {
 	mu       sync.Mutex
 	entryIDs []string
 }
+
+// OriginHost is the Origin of calls the host agent makes.
+const OriginHost = "host"
 
 type callKey struct{}
 

@@ -170,8 +170,11 @@ export interface Config {
   /**
    * serve: the inspector can start echo agents for cards. envSecrets: secrets can refer to the
    * inspector's environment variables. sharedCatalog: GET /api/catalog lists agents for every user.
+   * host: the UI can chat with the host agent.
    */
-  features: { serve: boolean; webhooks: boolean; envSecrets: boolean; sharedCatalog?: boolean };
+  features: { serve: boolean; webhooks: boolean; envSecrets: boolean; sharedCatalog?: boolean; host?: boolean };
+  /** The host agent's model, or why there's no host agent. */
+  host?: { model?: string; unavailable?: string };
   /** Protocol bindings the inspector supports. */
   bindings?: string[];
   /** Where agents send push notifications to the inspector, for this run. */
@@ -369,6 +372,8 @@ export interface GRPCExchange {
 export interface TrafficEntry {
   id: string;
   connectionId?: string;
+  /** "host" for calls the host agent made. */
+  origin?: string;
   startTime: string;
   /** Null while the exchange is in progress. */
   durationMs: number | null;
@@ -376,3 +381,42 @@ export interface TrafficEntry {
   http?: HTTPExchange;
   grpc?: GRPCExchange;
 }
+
+/** An agent the host agent can delegate to, through one of the UI's connections. */
+export interface HostAgentRef {
+  /** The UI's ID of the agent, which keeps the host agent's conversation with it across turns. */
+  id: string;
+  connectionId: string;
+  name?: string;
+}
+
+export interface HostRequest {
+  /** Continues a conversation with the host agent; without it, a new one starts. */
+  conversationId?: string;
+  text: string;
+  agents: HostAgentRef[];
+}
+
+/** A message the host agent sent to an agent, and its outcome. */
+export interface Delegation {
+  /** The model's function call. */
+  id: string;
+  /** The UI's ID of the agent. */
+  agentKey: string;
+  agentName: string;
+  request: string;
+  status: 'working' | 'done' | 'failed';
+  reply?: string;
+  error?: string;
+}
+
+/** What a turn of the host agent streams. */
+export type HostEvent =
+  | { type: 'conversation'; conversationId: string }
+  /** A piece of the host agent's answer when partial, or the whole of a part of it. */
+  | { type: 'text'; text: string; partial?: boolean }
+  /** A delegation that started or ended. */
+  | { type: 'delegation'; delegation: Delegation }
+  /** The result of a call the host agent made to an agent for a delegation. */
+  | { type: 'result'; delegationId: string; result: AgentResult }
+  | { type: 'error'; message: string };

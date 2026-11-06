@@ -2,11 +2,13 @@ import { type CSSProperties, lazy, Suspense, useCallback, useEffect, useReducer,
 import {
   type AgentEntry,
   afterSessionLoss,
+  agentName,
   agentsReducer,
   countFindings,
   createAgent,
   editable,
   findAgent,
+  HOST_ID,
   initialAgentsState,
   sameAgent,
   selectedInterfaceOf,
@@ -15,7 +17,7 @@ import {
   withoutConnection,
 } from './agents';
 import { viewPayload, viewPushConfig, viewPushConfigs } from './a2a/view';
-import { ApiError, api, isSessionRenewed, isUnknownConnection, onSessionRenewed } from './api/client';
+import { ApiError, api, isSessionRenewed, isUnknownConnection, isUnknownConversation, onSessionRenewed } from './api/client';
 import type {
   AgentInterface,
   AgentResult,
@@ -25,6 +27,8 @@ import type {
   Connection,
   ConnectionRequest,
   EchoAgent,
+  HostAgentRef,
+  HostEvent,
   ListTasksQuery,
   SendRequest,
 } from './api/types';
@@ -35,11 +39,13 @@ import type { CatalogView } from './components/CatalogDiscovery';
 import type { ServedInterface, ServeOutcome } from './components/CardEditorPanel';
 import { CardView } from './components/CardView';
 import { ChatPanel, type SentEcho } from './components/ChatPanel';
+import { HostChat } from './components/HostChat';
+import { HostPanel } from './components/HostPanel';
 import { ResizeHandle } from './components/ResizeHandle';
 import { Tabs } from './components/Tabs';
 import { type TaskOperation, TasksPanel } from './components/TasksPanel';
 import { ThemeToggle } from './components/ThemeToggle';
-import { TrafficPanel } from './components/TrafficPanel';
+import { TrafficPanel, type TrafficScope } from './components/TrafficPanel';
 import { ValidationPanel } from './components/ValidationPanel';
 import { templates } from './editor/templates';
 import { type Layout, type Side, useLayout } from './layout';
@@ -52,6 +58,7 @@ import {
   settingsFromHeaders,
   settingsRequest,
 } from './settings';
+import { delegates, hostReducer, initialHostState } from './host';
 import { useNotifications, webhookWarning } from './notifications';
 import { taskRef } from './tasks';
 import { useTraffic } from './traffic';
@@ -169,6 +176,8 @@ export function App() {
   const toggles = useRef<Record<Side, HTMLButtonElement | null>>({ left: null, right: null });
   const [tab, setTab] = useState('chat');
   const [trafficEntry, setTrafficEntry] = useState<string>();
+  const [host, hostDispatch] = useReducer(hostReducer, initialHostState);
+  const hostAbort = useRef<AbortController>(undefined);
   const traffic = useTraffic(session.state === 'ready');
   const webhooks = session.state === 'ready' && session.config.features.webhooks;
   const feed = useNotifications(webhooks, (connectionId, conversation) =>
@@ -190,9 +199,9 @@ export function App() {
    * Selects the agent and fetches its card, or checks the card its catalog entry has. The card
    * request carries the agent's auth and headers, for agents that protect their card.
    */
-  const resolveAgent = useCallback((agent: Pick<AgentEntry, 'id' | 'url' | 'card' | 'settings'>) => {
+  const resolveAgent = useCallback((agent: Pick<AgentEntry, 'id' | 'url' | 'card' | 'settings'>, select = true) => {
     const { id, card } = agent;
-    dispatch({ type: 'refresh', id });
+    dispatch({ type: 'refresh', id, select });
     let pending: Promise<CardResolveResponse>;
     if (card !== undefined) {
       pending = retryRenewed(() => api.validateCard(card)).then((v) => ({
@@ -652,6 +661,69 @@ export function App() {
     setSession({ state: 'ready', config });
   }
 
+  /** Shows the host agent, and fetches the cards it needs that aren't fetched yet. */
+  function selectHost() {
+    dispatch({ type: 'select', id: HOST_ID });
+    for (const a of agents) {
+      if (a.status === 'idle') resolveAgent(a, false);
+    }
+  }
+
+  /** Sends a message to the host agent, connecting its agents first, and tries once more if the inspector lost the conversation or a connection. */
+  async function sendToHost(text: string) {
+    const targets = delegates(agents, host);
+    hostDispatch({ type: 'user', text });
+    hostDispatch({ type: 'busy', busy: true });
+    const abort = new AbortController();
+    hostAbort.current = abort;
+    const current = (a: AgentEntry) => agentsRef.current.find((c) => c.id === a.id) ?? a;
+    const bindingOf = (id: string) => {
+      const agent = agentsRef.current.find((a) => a.id === id);
+      return (agent && selectedInterfaceOf(agent)?.protocolBinding) ?? '';
+    };
+    // The agent each delegation went to, so its tasks show in the agent's Tasks tab.
+    const delegatedTo = new Map<string, string>();
+    const onEvent = (event: HostEvent) => {
+      if (event.type === 'delegation') delegatedTo.set(event.delegation.id, event.delegation.agentKey);
+      const agentId = event.type === 'result' ? delegatedTo.get(event.delegationId) : undefined;
+      const ref = agentId && event.type === 'result' ? taskRef(event.result, bindingOf(agentId)) : undefined;
+      if (agentId && ref) dispatch({ type: 'task', id: agentId, ...ref, time: Date.now() });
+      hostDispatch({ type: 'event', event, binding: event.type === 'delegation' ? bindingOf(event.delegation.agentKey) : undefined });
+    };
+    const turn = async (prepare: (a: AgentEntry) => AgentEntry, conversationId: string | undefined) => {
+      const refs: HostAgentRef[] = [];
+      for (const target of targets) {
+        try {
+          const conn = await connect(prepare(current(target)));
+          refs.push({ id: target.id, connectionId: conn.id, name: agentName(target) });
+        } catch (err) {
+          hostDispatch({ type: 'note', message: `The host agent can't reach ${agentName(target)}: ${message(err)}` });
+        }
+      }
+      await api.hostStream({ conversationId, text, agents: refs }, onEvent, abort.signal);
+    };
+    try {
+      try {
+        await turn((a) => a, host.conversationId);
+      } catch (err) {
+        if (isSessionRenewed(err) || isUnknownConversation(err)) {
+          hostDispatch({ type: 'note', message: 'The inspector no longer has the conversation, so this message starts a new one.' });
+          await turn(isSessionRenewed(err) ? afterSessionLoss : (a) => a, undefined);
+        } else if (isUnknownConnection(err)) {
+          await turn(withoutConnection, host.conversationId);
+        } else {
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (abort.signal.aborted) hostDispatch({ type: 'note', message: 'Stopped.' });
+      else hostDispatch({ type: 'error', message: message(err) });
+    } finally {
+      hostAbort.current = undefined;
+      hostDispatch({ type: 'busy', busy: false });
+    }
+  }
+
   const selected = agents.find((a) => a.id === selectedId);
   const echoSource = selected?.echo?.source ? agents.find((a) => !a.echo && a.identifier === selected.echo?.source) : undefined;
   const findings = selected?.result?.payload?.validation.findings ?? [];
@@ -667,6 +739,11 @@ export function App() {
     setTrafficEntry(entryId);
     setTab('traffic');
   };
+  const hostSelected = selectedId === HOST_ID;
+  const hostDelegates = delegates(agents, host);
+  const trafficScope: TrafficScope = hostSelected
+    ? { label: 'Only the host agent', match: (e) => e.origin === 'host' }
+    : { label: 'Only the selected agent', match: (e) => !!selected?.connection && e.connectionId === selected.connection.id };
 
   return (
     <div className="app">
@@ -760,6 +837,7 @@ export function App() {
             onImport={(file) => void importCatalog(file)}
             onExport={() => download(`${JSON.stringify(toCatalog(agents, { envSecrets, exported: true }), null, 2)}\n`, 'ai-catalog.json')}
             onClose={() => closePanel('left')}
+            host={{ selected: hostSelected, model: config?.host?.model, delegates: hostDelegates.length, onSelect: selectHost }}
           />
           {layout.left.open && (
             <ResizeHandle
@@ -773,7 +851,15 @@ export function App() {
               onOpen={() => setOpen('left', true)}
             />
           )}
-          {selected?.draft ? (
+          {hostSelected && config ? (
+            <HostPanel
+              config={config}
+              agents={agents}
+              state={host}
+              onExclude={(id, excluded) => hostDispatch({ type: 'exclude', id, excluded })}
+              onOpenAgent={selectAgent}
+            />
+          ) : selected?.draft ? (
             <section className="panel center" aria-label="Card editor">
               <Suspense
                 fallback={
@@ -849,7 +935,18 @@ export function App() {
                   id: 'chat',
                   label: 'Chat',
                   fill: true,
-                  content: selected ? (
+                  content: hostSelected ? (
+                    <HostChat
+                      state={host}
+                      agents={hostDelegates.length}
+                      unavailable={config?.features.host ? undefined : (config?.host?.unavailable ?? 'This inspector has no host agent.')}
+                      onSend={(text) => void sendToHost(text)}
+                      onStop={() => hostAbort.current?.abort()}
+                      onNewConversation={() => hostDispatch({ type: 'newConversation' })}
+                      onOpenAgent={selectAgent}
+                      onShowTraffic={showTraffic}
+                    />
+                  ) : selected ? (
                     <ChatPanel
                       key={selected.id}
                       agent={selected}
@@ -875,24 +972,25 @@ export function App() {
                 {
                   id: 'tasks',
                   label: 'Tasks',
-                  content:
-                    selected && config ? (
-                      <TasksPanel
-                        key={selected.id}
-                        agent={selected}
-                        notifications={agentNotifications}
-                        live={feed.live}
-                        config={config}
-                        onGet={(taskId, historyLength) => void getTask(selected, taskId, historyLength)}
-                        onList={(query) => void listTasks(selected, query)}
-                        onOperation={(taskId, op) => void taskOperation(selected, taskId, op)}
-                        onSelect={(taskId) => dispatch({ type: 'selectTask', id: selected.id, taskId })}
-                        onWebhookBaseUrl={setWebhookBaseUrl}
-                        onShowTraffic={showTraffic}
-                      />
-                    ) : (
-                      <p className="notice small">Add an agent to work with its tasks.</p>
-                    ),
+                  content: hostSelected ? (
+                    <p className="notice small">The host agent has no tasks of its own. The tasks of its delegations show in the agents' Tasks tabs.</p>
+                  ) : selected && config ? (
+                    <TasksPanel
+                      key={selected.id}
+                      agent={selected}
+                      notifications={agentNotifications}
+                      live={feed.live}
+                      config={config}
+                      onGet={(taskId, historyLength) => void getTask(selected, taskId, historyLength)}
+                      onList={(query) => void listTasks(selected, query)}
+                      onOperation={(taskId, op) => void taskOperation(selected, taskId, op)}
+                      onSelect={(taskId) => dispatch({ type: 'selectTask', id: selected.id, taskId })}
+                      onWebhookBaseUrl={setWebhookBaseUrl}
+                      onShowTraffic={showTraffic}
+                    />
+                  ) : (
+                    <p className="notice small">Add an agent to work with its tasks.</p>
+                  ),
                 },
                 {
                   id: 'traffic',
@@ -901,7 +999,7 @@ export function App() {
                     <TrafficPanel
                       entries={traffic.entries}
                       live={traffic.live}
-                      connectionId={selected?.connection?.id}
+                      scope={trafficScope}
                       expandedId={trafficEntry}
                       onExpand={setTrafficEntry}
                     />
@@ -915,7 +1013,11 @@ export function App() {
                       {problems}
                     </span>
                   ),
-                  content: <ValidationPanel agent={selected} />,
+                  content: hostSelected ? (
+                    <p className="notice small">Validation of the agents' responses shows with each delegation in the chat.</p>
+                  ) : (
+                    <ValidationPanel agent={selected} />
+                  ),
                 },
               ]}
             />

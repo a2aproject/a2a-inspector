@@ -24,12 +24,13 @@ The **A2A Inspector** (`a2a-inspector`) is a web-based tool for developers of [A
 - **Traffic:** every HTTP exchange and gRPC call as it went over the wire, with each response validated.
 - **Saved agents and AI Catalogs:** agents are saved in the browser as an [AI Catalog](https://ai-catalog.io/), export and import as a catalog file, and can be added from any catalog URL.
 - **Card editor:** writes and edits cards with suggestions and documentation from the card schema and the inspector's checks as you type, and serves a card as a local echo agent to talk to.
+- **Host agent:** an LLM agent built with [adk-go](https://github.com/google/adk-go) that answers you by delegating to your agents, with its calls in the traffic log.
 
 Built on [A2A Protocol v1.0](https://a2a-protocol.org/v1.0.0/specification/), and works with v0.3 agents too.
 
 ## Installation
 
-**From source** (Go 1.26 or later)
+**From source** (Go 1.26.10 or later)
 
 ```bash
 go install github.com/a2aproject/a2a-inspector@latest
@@ -82,6 +83,14 @@ The inspector saves the agents you add in the browser, as an [AI Catalog](https:
 
 **Serve** runs the card as an echo agent on this machine and opens it: the agent answers every message with the message's text, so you can try the card with the rest of the inspector. The inspector has no serving code of its own: it starts [a2a-cli](https://github.com/a2aproject/a2a-cli) as `a2a server --card <file> --echo` on a free `127.0.0.1` port, with `a2a` or `a2a-cli` from the `PATH`, and stops it when you do or when the inspector exits. The card it serves has a single interface, on that port, with the binding and version you pick in place of the card's. Echo agents are listed above the saved agents while the inspector runs them. With `--egress=public`, Serve needs `--egress-allow 127.0.0.1`, since echo agents listen on loopback. A shared instance has no Serve.
 
+## Host agent
+
+The host agent is an LLM agent, built with [adk-go](https://github.com/google/adk-go), that answers your messages by delegating to your agents, as a multi-agent host would. Select **Host agent** in the agents panel to chat with it and to pick the agents it delegates to. Each agent is one of its tools, described to the model by the name, description and skills in the agent's card, so you can see whether your card makes a host pick your agent.
+
+Its messages to an agent come from adk-go's remote A2A agent and go through the same connection, credentials and interface as your own, so they show in the traffic log, marked as the host agent's, and are validated. In the chat, each delegation shows what the host agent sent, the agent's responses on the wire and the reply it got back. The host agent keeps its own conversation with each agent, apart from yours, and continues a task that waits for input with its next message to the agent.
+
+It runs on Gemini, `gemini-flash-lite-latest` unless `--llm-model` names another model, and is on when the environment has credentials: `GOOGLE_API_KEY` or `GEMINI_API_KEY` for the Gemini API, or `GOOGLE_GENAI_USE_VERTEXAI=true` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` for Vertex AI with Application Default Credentials. The credentials stay in the inspector's backend. Your messages to the host agent, the agents' replies (up to 32K characters each) and the names, descriptions and skills in their cards go to Gemini; agent credentials and headers don't. A turn makes up to 25 model calls, and a session has one turn at a time. On a shared instance, every user's turns run on the credentials of the instance.
+
 ## Running a shared instance
 
 `a2a-inspector --hosted` runs the inspector as a service for multiple users:
@@ -90,6 +99,7 @@ The inspector saves the agents you add in the browser, as an [AI Catalog](https:
 - **Access:** the inspector doesn't sign users in. Who can reach it is up to where you deploy it, for example your platform's access control or an authenticating proxy in front of it. Serve it over HTTPS: the session cookie is `Secure`, which browsers keep over plain HTTP only on `localhost`.
 - **Egress:** it connects only to public addresses, so users can't reach the network it runs in or a cloud metadata server. `--egress-allow` adds exceptions: CIDR blocks, IP addresses, host names or `*.example.com`. The check applies to every transport and redirect. Requests go through `HTTPS_PROXY` when it's set; the proxy resolves names again, so it should apply its own egress rules too. Locally, `--egress=public` turns on the same policy.
 - **Switches:** the webhook receiver is off, since agents can't reach an instance behind access control, secrets can't refer to the server's environment variables, and Serve is off.
+- **Host agent:** on when the instance has Gemini credentials, and every user's turns run on them, so users' messages and agents' replies go to the operator's Gemini project. Users see only the status of model errors; the log has the rest. Its calls to agents follow the egress policy and limits like the users' own, its streams to agents count against `--max-streams`, and a turn ends at `--max-stream-duration`.
 - **Shared agents:** `--catalog` preloads agents for every user, with no credentials: users enter their own for agents that need them.
 - **Limits:** `--max-sessions` (500), and per session `--max-connections` (20), `--max-streams` (8), `--traffic-buffer-mib` (4), `--request-rate` (5 per second) and `--session-egress-rate` (10 requests to agents per second). `--egress-rate` (200 per second) caps requests to agents over all sessions, and `--max-stream-duration` (30 minutes) ends long streams.
 - **Limits per client:** a client that drops its cookie gets a new session, so per-session limits alone don't stop one client from using up the shared ones. `--client-header` names a header the proxy in front of the inspector sets to identify the client: `X-Forwarded-For` for its address, or a header with the signed-in user from an authenticating proxy. A client then has at most `--client-max-sessions` (10) sessions, starts 10 at once and then one every 10 seconds, and makes up to `--client-egress-rate` (50 per second) requests to agents. `--trusted-proxies` (1) is how many proxies add an entry to the header; the client is the entry that many from the end, so entries a client adds itself are ignored. IPv6 addresses count per /64. Use a header clients can't set past the proxy, and leave this off when many users share an address, such as event attendees on one network.

@@ -82,6 +82,15 @@ type features struct {
 	EnvSecrets bool `json:"envSecrets"`
 	// SharedCatalog is set when GET /api/catalog lists agents for every user.
 	SharedCatalog bool `json:"sharedCatalog"`
+	// Host is set when the UI can chat with the host agent.
+	Host bool `json:"host"`
+}
+
+type hostView struct {
+	// Model is the LLM the host agent runs on.
+	Model string `json:"model,omitempty"`
+	// Unavailable says why there's no host agent.
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 type configResponse struct {
@@ -95,6 +104,7 @@ type configResponse struct {
 	// Startup is how to connect to the agent opened on start.
 	Startup  *startupConfig `json:"startup,omitempty"`
 	Features features       `json:"features"`
+	Host     *hostView      `json:"host,omitempty"`
 	// Bindings lists the protocol bindings the inspector supports.
 	Bindings []string `json:"bindings"`
 	// WebhookBaseURL is the URL new webhooks are created under, and
@@ -146,11 +156,19 @@ func (s *Server) config() configResponse {
 			bindings = append(bindings, t.Binding)
 		}
 	}
+	var hv *hostView
+	switch {
+	case s.opts.HostModel != nil:
+		hv = &hostView{Model: s.opts.HostModel.Name()}
+	case s.opts.HostUnavailable != "":
+		hv = &hostView{Unavailable: s.opts.HostUnavailable}
+	}
 	if s.opts.Hosted {
 		return configResponse{
 			Mode:               "hosted",
 			IdleTimeoutSeconds: int(s.opts.Limits.IdleTimeout.Seconds()),
-			Features:           features{SharedCatalog: s.shared != nil},
+			Features:           features{SharedCatalog: s.shared != nil, Host: s.opts.HostModel != nil},
+			Host:               hv,
 			Bindings:           bindings,
 		}
 	}
@@ -158,7 +176,8 @@ func (s *Server) config() configResponse {
 		Mode:                  "local",
 		AgentCardURL:          s.opts.AgentCardURL,
 		Startup:               s.startup,
-		Features:              features{Serve: s.echo != nil, Webhooks: true, EnvSecrets: true, SharedCatalog: s.shared != nil},
+		Features:              features{Serve: s.echo != nil, Webhooks: true, EnvSecrets: true, SharedCatalog: s.shared != nil, Host: s.opts.HostModel != nil},
+		Host:                  hv,
 		Bindings:              bindings,
 		WebhookBaseURL:        s.webhookBaseURL(),
 		DefaultWebhookBaseURL: s.defaultWebhookURL,

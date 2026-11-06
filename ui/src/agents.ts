@@ -130,6 +130,9 @@ export function selectedInterfaceOf(agent: AgentEntry): AgentInterface | undefin
   return agent.selectedInterface === null ? undefined : interfacesOf(agent)[agent.selectedInterface];
 }
 
+/** The selection that shows the host agent instead of an agent. */
+export const HOST_ID = 'host';
+
 export interface AgentsState {
   agents: AgentEntry[];
   selectedId: string | null;
@@ -155,7 +158,8 @@ export type AgentsAction =
   | { type: 'closeEditor'; id: string }
   /** The echo agent's state, as the inspector reports it. */
   | { type: 'echoStatus'; id: string; echo: EchoAgent }
-  | { type: 'refresh'; id: string }
+  /** The card is being fetched; the agent is selected unless select is false. */
+  | { type: 'refresh'; id: string; select?: boolean }
   | { type: 'resolved'; id: string; result: CardResolveResponse }
   | { type: 'failed'; id: string; error: string }
   | { type: 'select'; id: string }
@@ -326,7 +330,8 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
       const added = action.entries.filter((e) => !agents.some((a) => sameAgent(a, e)));
       return {
         agents: [...agents, ...added],
-        selectedId: agents.some((a) => a.id === state.selectedId) ? state.selectedId : null,
+        // The host agent's selection isn't an agent's.
+        selectedId: agents.some((a) => a.id === state.selectedId) || state.selectedId === HOST_ID ? state.selectedId : null,
       };
     }
     case 'newCard': {
@@ -360,7 +365,7 @@ export function agentsReducer(state: AgentsState, action: AgentsAction): AgentsS
     case 'echoStatus':
       return { ...state, agents: patch(state.agents, action.id, { echo: action.echo }) };
     case 'refresh':
-      return { agents: patch(state.agents, action.id, { status: 'loading', error: undefined }), selectedId: action.id };
+      return { agents: patch(state.agents, action.id, { status: 'loading', error: undefined }), selectedId: action.select === false ? state.selectedId : action.id };
     case 'resolved': {
       const entry = state.agents.find((a) => a.id === action.id);
       if (!entry) {

@@ -1233,4 +1233,122 @@ describe('App', () => {
       expect(within(editor).queryByRole('region', { name: 'Serve' })).not.toBeInTheDocument();
     });
   });
+  describe('host agent', () => {
+    const hostConfig: Config = { ...config, agentCardUrl: resolved.cardUrl, features: { ...config.features, host: true }, host: { model: 'gemini-test' } };
+    const connection: Connection = {
+      id: 'conn-1',
+      interface: resolved.interfaces[0]!,
+      custom: false,
+      availableInterfaces: resolved.interfaces,
+      headers: [],
+      extensions: [],
+    };
+    const delegation = { id: 'call-1', agentKey: 'agent-1', agentName: 'Echo Agent', request: 'convert 100 USD' };
+    const taskResult: AgentResult = {
+      payload: {
+        protocolVersion: '1.0',
+        raw: { task: { id: 't-1', contextId: 'ctx-9', status: { state: 'TASK_STATE_COMPLETED' }, artifacts: [{ artifactId: 'a', parts: [{ text: 'echo: 86 EUR' }] }] } },
+        validation: { findings: [] },
+      },
+      call: { trafficEntryId: 'tr-7', latencyMs: 5, error: null },
+    };
+    const turn = (conversationId: string) =>
+      sse(
+        [
+          { event: 'conversation', data: { conversationId } },
+          { event: 'text', data: { text: 'Asking ', partial: true } },
+          { event: 'text', data: { text: 'Asking Echo Agent.' } },
+          { event: 'delegation', data: { ...delegation, status: 'working' } },
+          { event: 'result', data: { delegationId: 'call-1', result: taskResult } },
+          { event: 'delegation', data: { ...delegation, status: 'done', reply: 'echo: 86 EUR' } },
+          { event: 'text', data: { text: 'Echo Agent says 86 EUR.' } },
+        ],
+        true,
+      );
+    const hostBodies = (fetch: ReturnType<typeof mockApi>) =>
+      fetch.mock.calls.filter(([u]) => u === '/api/host/messages:stream').map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const openHost = async (user: ReturnType<typeof userEvent.setup>) => {
+      await screen.findByRole('heading', { name: 'Echo Agent' });
+      await user.click(within(screen.getByRole('navigation', { name: 'Agents' })).getByRole('button', { name: /^Host agent/ }));
+      return screen.findByRole('heading', { name: 'Host agent', level: 2 });
+    };
+
+    it('chats with the host agent, which delegates to the agents picked for it', async () => {
+      let turns = 0;
+      const fetch = mockApi({
+        '/api/config': () => json(hostConfig),
+        '/api/card:resolve': () => json(resolved),
+        '/api/connections': () => json(connection, 201),
+        '/api/host/messages:stream': () => turn(`host-${++turns}`),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await openHost(user);
+      expect(screen.getByText('gemini-test', { selector: '.pill' })).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Echo Agent' })).toBeChecked();
+
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'convert 100 USD{Enter}');
+      const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+      expect(await transcript.findByText('Echo Agent says 86 EUR.')).toBeInTheDocument();
+      expect(transcript.getByText('Asking Echo Agent.')).toBeInTheDocument();
+      expect(transcript.getByText('convert 100 USD', { selector: '.delegation .text' })).toBeInTheDocument();
+      expect(transcript.getByText('done')).toBeInTheDocument();
+      expect(transcript.getAllByText('completed').length).toBeGreaterThan(0);
+      expect(hostBodies(fetch)[0]).toEqual({ text: 'convert 100 USD', agents: [{ id: 'agent-1', connectionId: 'conn-1', name: 'Echo Agent' }] });
+
+      // The agent's results are on the wire, in the traffic log.
+      await user.click(transcript.getByText('1 response on the wire'));
+      await user.click(transcript.getByRole('button', { name: 'Wire traffic' }));
+      expect(screen.getByRole('tab', { name: 'Traffic' })).toHaveAttribute('aria-selected', 'true');
+
+      // The next message continues the conversation, without the agent the user unchecked.
+      await user.click(screen.getByRole('checkbox', { name: 'Echo Agent' }));
+      await user.click(screen.getByRole('tab', { name: 'Chat' }));
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'again{Enter}');
+      await waitFor(() => expect(hostBodies(fetch)).toHaveLength(2));
+      expect(hostBodies(fetch)[1]).toEqual({ conversationId: 'host-1', text: 'again', agents: [] });
+
+      // The delegation's task shows in the agent's Tasks tab.
+      await user.click(screen.getByRole('button', { name: 'Open Echo Agent' }));
+      await user.click(screen.getByRole('tab', { name: 'Tasks' }));
+      const tasks = within(screen.getByRole('tabpanel', { name: 'Tasks' }));
+      expect(await tasks.findByText('t-1', { exact: false })).toBeInTheDocument();
+      expect(tasks.getAllByText('completed').length).toBeGreaterThan(0);
+    });
+
+    it('starts a new conversation when the inspector lost the old one', async () => {
+      const fetch = mockApi({
+        '/api/config': () => json(hostConfig),
+        '/api/card:resolve': () => json(resolved),
+        '/api/connections': () => json(connection, 201),
+        '/api/host/messages:stream': (init) =>
+          JSON.parse(String(init?.body)).conversationId === 'host-1'
+            ? json({ error: { code: 'unknownConversation', message: 'The inspector no longer has this conversation.' } }, 404)
+            : turn('host-1'),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await openHost(user);
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'one{Enter}');
+      const transcript = within(screen.getByRole('list', { name: 'Messages' }));
+      await transcript.findByText('Echo Agent says 86 EUR.');
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'two{Enter}');
+      expect(await transcript.findByText(/starts a new one/)).toBeInTheDocument();
+      await waitFor(() => expect(hostBodies(fetch)).toHaveLength(3));
+      expect(hostBodies(fetch)[2]).not.toHaveProperty('conversationId');
+    });
+
+    it('shows why the host agent is off', async () => {
+      mockApi({
+        '/api/config': () => json({ ...config, agentCardUrl: resolved.cardUrl, host: { unavailable: 'No credentials for Gemini.' } }),
+        '/api/card:resolve': () => json(resolved),
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await openHost(user);
+      expect(screen.getByText('The host agent is off.')).toBeInTheDocument();
+      expect(screen.getAllByText(/No credentials for Gemini\./).length).toBe(2);
+      expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument();
+    });
+  });
 });

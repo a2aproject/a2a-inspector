@@ -101,6 +101,7 @@ type session struct {
 	secrets *secretStore
 	conns   *connections
 	hooks   *hooks
+	host    *hostConversations
 	// limiter bounds the session's API requests; nil means no limit.
 	limiter *rate.Limiter
 	// quota is the share of the client that started the session; nil
@@ -141,6 +142,7 @@ func (s *Server) newSession(id string, q *clientQuota) *session {
 		secrets: newSecretStore(!s.opts.Hosted),
 		conns:   newConnections(s.opts.Limits.Connections),
 		hooks:   newHooks(),
+		host:    &hostConversations{byID: map[string]*hostConversation{}},
 		limiter: newLimiter(s.opts.Limits.RequestRate, 4),
 		quota:   q,
 		created: time.Now(),
