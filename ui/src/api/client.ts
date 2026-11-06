@@ -9,8 +9,11 @@ import type {
   Config,
   Connection,
   ConnectionRequest,
+  Delegation,
   EchoAgent,
   HeaderInput,
+  HostEvent,
+  HostRequest,
   ListTasksQuery,
   PushConfigRequest,
   SendRequest,
@@ -45,6 +48,11 @@ export function isSessionRenewed(err: unknown): boolean {
 /** Whether the inspector no longer has the connection, for example because it made room for a newer one. */
 export function isUnknownConnection(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404 && err.code === 'unknownConnection';
+}
+
+/** Whether the inspector no longer has the conversation with the host agent. */
+export function isUnknownConversation(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && err.code === 'unknownConversation';
 }
 
 let renewedListener: (() => void) | undefined;
@@ -136,6 +144,24 @@ const results = (path: string, init: RequestInit, onResult: (result: AgentResult
     onResult(JSON.parse(event.data) as AgentResult);
   });
 
+/** Turns an event of the host agent's stream into a HostEvent, named by its type. */
+function hostEvent(event: SSEEvent): HostEvent | undefined {
+  const data = JSON.parse(event.data) as Record<string, unknown>;
+  switch (event.event) {
+    case 'conversation':
+      return { type: 'conversation', conversationId: String(data.conversationId) };
+    case 'text':
+      return { type: 'text', text: String(data.text), partial: data.partial === true };
+    case 'delegation':
+      return { type: 'delegation', delegation: data as unknown as Delegation };
+    case 'result':
+      return { type: 'result', delegationId: String(data.delegationId), result: data.result as AgentResult };
+    case 'error':
+      return { type: 'error', message: String(data.message) };
+  }
+  return undefined;
+}
+
 export const api = {
   config: () => request<Config>('/api/config'),
   resolveCard: (url: string, credentials: { auth?: AuthInput; headers?: HeaderInput[] } = {}) =>
@@ -170,4 +196,10 @@ export const api = {
   serve: (req: ServeRequest) => request<EchoAgent>('/api/serve', post(req)),
   echoAgents: () => request<{ agents: EchoAgent[] }>('/api/serve'),
   stopEcho: (id: string) => request<void>(`/api/serve/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Sends a message to the host agent and follows its turn; resolves when the turn ends. */
+  hostStream: (req: HostRequest, onEvent: (event: HostEvent) => void, signal?: AbortSignal) =>
+    readEvents('/api/host/messages:stream', { ...post(req), signal }, (event) => {
+      const parsed = hostEvent(event);
+      if (parsed) onEvent(parsed);
+    }),
 };

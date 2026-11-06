@@ -34,6 +34,7 @@ import (
 
 	"github.com/a2aproject/a2a-inspector/internal/agents"
 	"github.com/a2aproject/a2a-inspector/internal/egress"
+	"github.com/a2aproject/a2a-inspector/internal/hostagent"
 	"github.com/a2aproject/a2a-inspector/internal/server"
 	"github.com/a2aproject/a2a-inspector/ui"
 	"github.com/spf13/cobra"
@@ -56,6 +57,7 @@ type flags struct {
 	noOpen     bool
 	webhookURL string
 	catalog    string
+	llmModel   string
 
 	hosted      bool
 	egress      string
@@ -108,6 +110,8 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 	fs.BoolVar(&f.noOpen, "no-open", false, "Don't open the browser")
 	fs.StringVar(&f.webhookURL, "webhook-url", "", "Base URL agents use to reach the inspector's webhook receiver, such as a tunnel; default: the inspector's own address")
 	fs.StringVar(&f.catalog, "catalog", "", "AI Catalog file or URL whose agents every user sees in the agent list; read on start")
+	fs.StringVar(&f.llmModel, "llm-model", hostagent.DefaultModel, "Gemini model of the host agent, which delegates to your agents. "+
+		"It's on when the environment has GOOGLE_API_KEY or GEMINI_API_KEY, or GOOGLE_GENAI_USE_VERTEXAI=true with GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION")
 	fs.BoolVar(&f.hosted, "hosted", false, "Run as a shared service for many users, each in their own session, within the limits below. "+
 		"Listens on all addresses and $PORT (default 8080), and turns off the webhook receiver and environment-variable secrets")
 	fs.StringVar(&f.egress, "egress", "", `Addresses the inspector connects to: "any", or "public" to block loopback, private, link-local (cloud metadata) and other non-public addresses (default "public" with --hosted, otherwise "any")`)
@@ -145,6 +149,11 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 	if err != nil {
 		return err
 	}
+	if m, err := hostagent.NewGeminiModel(ctx, f.llmModel); err != nil {
+		sopts.HostUnavailable = strings.ToUpper(err.Error()[:1]) + err.Error()[1:] + "."
+	} else {
+		sopts.HostModel = m
+	}
 	if f.hosted {
 		logger := log.New(stderr, "", log.LstdFlags)
 		sopts.Logger = logger
@@ -180,8 +189,12 @@ func run(ctx context.Context, opts Options, f flags, stdout, stderr io.Writer, o
 			perClient = fmt.Sprintf("per client from %s (%d trusted proxies) %d sessions, %g requests/s to agents",
 				l.ClientHeader, l.TrustedProxies, l.ClientSessions, l.ClientEgressRate)
 		}
-		sopts.Logger.Printf("egress %s; limits: %d sessions, idle %s, max age %s; per session %d connections, %d streams, %d MiB traffic, %g requests/s, %g requests/s to agents; %s; %g requests/s to agents in all; streams up to %s",
-			egressMode(f), l.MaxSessions, l.IdleTimeout, l.MaxAge, l.Connections, l.Streams, l.TrafficBytes>>20, l.RequestRate, l.SessionEgressRate, perClient, l.EgressRate, l.StreamDuration)
+		hostAgent := "off"
+		if sopts.HostModel != nil {
+			hostAgent = "on " + sopts.HostModel.Name()
+		}
+		sopts.Logger.Printf("egress %s; limits: %d sessions, idle %s, max age %s; per session %d connections, %d streams, %d MiB traffic, %g requests/s, %g requests/s to agents; %s; %g requests/s to agents in all; streams up to %s; host agent %s",
+			egressMode(f), l.MaxSessions, l.IdleTimeout, l.MaxAge, l.Connections, l.Streams, l.TrafficBytes>>20, l.RequestRate, l.SessionEgressRate, perClient, l.EgressRate, l.StreamDuration, hostAgent)
 	default:
 		if !agents.IsLoopbackHost(f.host) {
 			_, _ = fmt.Fprintf(stderr, "Warning: listening on %s, so other machines can reach the inspector. "+

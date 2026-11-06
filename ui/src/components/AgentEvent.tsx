@@ -18,6 +18,8 @@ export interface FormHandler {
   /** Missing where forms can't be answered. */
   onSubmit?: (key: string, values: Record<string, unknown>) => void;
   disabled?: boolean;
+  /** Says where forms that can't be answered here are answered. */
+  hint?: string;
 }
 
 export const stateLevels: Record<string, string> = {
@@ -215,6 +217,7 @@ export function PartContent({ part, form }: { part: PartView; form?: FormHandler
           submitted={submitted}
           disabled={form?.disabled}
           onSubmit={form?.onSubmit && ((values) => form.onSubmit?.(form.key, values))}
+          hint={form?.hint}
         />
       );
     }

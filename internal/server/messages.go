@@ -254,8 +254,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	conn, tc := sc.conn, sc.tc
-	binding, version := conn.binding()
+	conn := sc.conn
 	opFindings := s.operationFindings(conn, sc.op)
 	ctx, stop := s.callContext(r, conn)
 	defer stop()
@@ -265,22 +264,40 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 		defer cancel()
 	}
 	var mu sync.Mutex
-	emitted, failed := 0, false
+	first := true
 	emit := func(res agentResult) {
 		mu.Lock()
 		defer mu.Unlock()
-		if emitted == 0 {
+		if first {
+			first = false
 			res.Call.Findings = append(opFindings, res.Call.Findings...)
 			// A rejection as the first result ends the stream.
 			res.Webhook = sess.hooks.drop(ctx, sc.webhook, res)
 		}
 		conn.settle(&res, sc.own)
 		sess.hooks.bind(sc.webhook, res)
-		emitted++
-		failed = failed || res.Call.Error != nil
 		data, _ := json.Marshal(res)
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+	}
+	s.runStream(ctx, sess, conn, sc.tc, sc.run, emit, nil)
+}
+
+// runStream makes a streaming call and passes emit a result for every event,
+// read from the wire as it arrives, or for what else ended the stream.
+// forward, if set, gets the events and the error as a2a-go decoded them, and
+// ends the stream by returning false.
+func (s *Server) runStream(ctx context.Context, sess *session, conn *connection, tc *traffic.Call,
+	run func(context.Context) iter.Seq2[a2a.Event, error], emit func(agentResult), forward func(a2a.Event, error) bool) {
+	binding, version := conn.binding()
+	var mu sync.Mutex
+	emitted, failed := 0, false
+	out := func(res agentResult) {
+		mu.Lock()
+		emitted++
+		failed = failed || res.Call.Error != nil
+		mu.Unlock()
+		emit(res)
 	}
 
 	start := time.Now()
@@ -295,17 +312,17 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 		}
 		res := agentResult{Call: call{TrafficEntryID: entryID, LatencyMs: time.Since(start).Milliseconds()}}
 		res.Payload, res.Call.Error = s.eventPayload([]byte(f.Data), binding, version, id)
-		emit(res)
+		out(res)
 	}
 	tc.OnMessage = func(entryID string, m traffic.GRPCMessage) {
-		emit(agentResult{
+		out(agentResult{
 			Call:    call{TrafficEntryID: entryID, LatencyMs: time.Since(start).Milliseconds()},
 			Payload: s.payload(m.JSON, version, binding, validate.StreamResponse),
 		})
 	}
 
 	var streamErr error
-	for event, err := range sc.run(traffic.WithCall(ctx, tc)) {
+	for event, err := range run(traffic.WithCall(ctx, tc)) {
 		if err != nil {
 			streamErr = err
 			break
@@ -313,11 +330,17 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 		if tc.LastEntryID() == "" {
 			// A transport the inspector can't record: show what a2a-go
 			// decoded.
-			emit(s.decodedResult(start, binding, validate.StreamResponse, a2a.StreamResponse{Event: event}))
+			out(s.decodedResult(start, binding, validate.StreamResponse, a2a.StreamResponse{Event: event}))
+		}
+		if forward != nil && !forward(event, nil) {
+			return
 		}
 	}
+	if forward != nil && streamErr != nil {
+		defer forward(nil, streamErr)
+	}
 	if context.Cause(ctx) == errStreamLimit {
-		emit(agentResult{Call: call{
+		out(agentResult{Call: call{
 			TrafficEntryID: tc.LastEntryID(),
 			LatencyMs:      time.Since(start).Milliseconds(),
 			Error:          &callError{Message: fmt.Sprintf("The inspector ended the stream after %s, its limit for streams.", s.opts.Limits.StreamDuration)},
@@ -337,7 +360,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	// without events.
 	entry, ok := sess.traffic.Get(tc.LastEntryID())
 	if ok && (entry.GRPC != nil || (entry.HTTP != nil && !traffic.IsEventStream(headerValue(entry.HTTP.ResponseHeaders, "Content-Type")))) {
-		emit(s.unaryResult(sess, conn, tc, start, validate.StreamResponse, nil, streamErr))
+		out(s.unaryResult(sess, conn, tc, start, validate.StreamResponse, nil, streamErr))
 		return
 	}
 	res := agentResult{Call: call{TrafficEntryID: tc.LastEntryID(), LatencyMs: time.Since(start).Milliseconds()}}
@@ -353,7 +376,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, sc streamC
 	default:
 		res.Call.Error = &callError{Message: "The stream ended without any events."}
 	}
-	emit(res)
+	out(res)
 }
 
 // operationFindings reports what the card and the protocol version say

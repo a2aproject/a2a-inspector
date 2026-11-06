@@ -3,24 +3,30 @@ import type { TrafficEntry, WireHeader } from '../api/types';
 import { entryStatus, entryTitle } from '../traffic';
 import { JsonBlock } from './JsonBlock';
 
+/** The entries the filter keeps, and its label. */
+export interface TrafficScope {
+  label: string;
+  match: (entry: TrafficEntry) => boolean;
+}
+
 interface Props {
   entries: TrafficEntry[];
   live: boolean;
-  /** The selected agent's connection, for the filter. */
-  connectionId?: string;
+  /** What the filter keeps: the selected agent's entries, or the host agent's. */
+  scope: TrafficScope;
   /** The entry to show expanded, for example one the chat links to. */
   expandedId?: string;
   onExpand: (id: string | undefined) => void;
 }
 
 /** The wire-level log of every request to and response from agents. */
-export function TrafficPanel({ entries, live, connectionId, expandedId, onExpand }: Props) {
+export function TrafficPanel({ entries, live, scope, expandedId, onExpand }: Props) {
   const id = useId();
   const [onlyAgent, setOnlyAgent] = useState(false);
   // Entries that started at or before this time (ms) are hidden.
   const [clearedBefore, setClearedBefore] = useState<number>();
   const shown = entries
-    .filter((e) => !onlyAgent || (connectionId !== undefined && e.connectionId === connectionId))
+    .filter((e) => !onlyAgent || scope.match(e))
     .filter((e) => clearedBefore === undefined || Date.parse(e.startTime) > clearedBefore || e.id === expandedId)
     .slice()
     .reverse();
@@ -34,7 +40,7 @@ export function TrafficPanel({ entries, live, connectionId, expandedId, onExpand
         </span>
         <label className="inline small">
           <input type="checkbox" checked={onlyAgent} onChange={(e) => setOnlyAgent(e.target.checked)} />
-          Only the selected agent
+          {scope.label}
         </label>
         <button
           type="button"
@@ -63,6 +69,7 @@ export function TrafficPanel({ entries, live, connectionId, expandedId, onExpand
                 >
                   <span className={`chip chip-${status.level}`}>{status.label}</span>
                   <span className="mono traffic-title">{entryTitle(e)}</span>
+                  {e.origin === 'host' && <span className="pill">host agent</span>}
                   <span className="faint small nowrap">
                     {e.durationMs === null ? 'open' : `${e.durationMs} ms`}
                     {e.http?.sseFrames?.length ? ` · ${e.http.sseFrames.length} events` : ''}
@@ -110,6 +117,7 @@ function EntryDetail({ entry }: { entry: TrafficEntry }) {
     <p className="faint small">
       {entry.id} · {new Date(entry.startTime).toLocaleTimeString()}
       {entry.connectionId ? ` · ${entry.connectionId}` : ' · card request'}
+      {entry.origin === 'host' && ' · sent by the host agent'}
     </p>
   );
   const error = entry.error && (

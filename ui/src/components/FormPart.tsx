@@ -8,10 +8,12 @@ interface Props {
   /** Missing where the form can't be answered; it's shown read-only then. */
   onSubmit?: (values: Record<string, unknown>) => void;
   disabled?: boolean;
+  /** Says where a read-only form is answered. */
+  hint?: string;
 }
 
 /** A form an agent sent in a data part, answered with a data part of its values. */
-export function FormPart({ form, submitted, onSubmit, disabled }: Props) {
+export function FormPart({ form, submitted, onSubmit, disabled, hint = 'Answer it in the Chat tab.' }: Props) {
   const id = useId();
   const [inputs, setInputs] = useState<FormInputs>(form.initial);
   const readOnly = submitted !== undefined || !onSubmit;
@@ -73,7 +75,7 @@ export function FormPart({ form, submitted, onSubmit, disabled }: Props) {
           Submit
         </button>
       ) : (
-        <p className="faint small">Answer it in the Chat tab.</p>
+        <p className="faint small">{hint}</p>
       )}
     </form>
   );

@@ -136,9 +136,8 @@ type connection struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.Mutex
-	contextID string
-	openTask  *taskState
+	// thread is the conversation the UI's messages continue.
+	thread
 }
 
 func (c *connection) stop() { c.cancel() }
@@ -154,20 +153,28 @@ func (c *connection) response() connectionResponse {
 	return v
 }
 
+// thread is a conversation with an agent: the context the next message
+// continues, and the task waiting for the user, which it continues too.
+type thread struct {
+	mu        sync.Mutex
+	contextID string
+	openTask  *taskState
+}
+
 // conversation returns the context and the open task the next message continues.
-func (c *connection) conversation() (string, *taskState) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.contextID, c.openTask
+func (t *thread) conversation() (string, *taskState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.contextID, t.openTask
 }
 
 // reset forgets the open task, and with newContext the context too.
-func (c *connection) reset(newContext bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.openTask = nil
+func (t *thread) reset(newContext bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.openTask = nil
 	if newContext {
-		c.contextID = ""
+		t.contextID = ""
 	}
 }
 
@@ -175,19 +182,19 @@ func (c *connection) reset(newContext bool) {
 // to the conversation's own messages (own) set its context. A task waiting
 // for the user becomes the open task, if it's in the conversation's context;
 // the open task closes when it moves on.
-func (c *connection) observe(raw json.RawMessage, own bool) {
+func (t *thread) observe(raw json.RawMessage, own bool) {
 	ref := taskRefOf(raw)
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if own && ref.ContextID != "" {
-		c.contextID = ref.ContextID
+		t.contextID = ref.ContextID
 	}
 	switch {
 	case ref.ID == "" || ref.State == "":
-	case (ref.State == "input-required" || ref.State == "auth-required") && (own || ref.ContextID == c.contextID):
-		c.openTask = &taskState{ID: ref.ID, State: ref.State}
-	case c.openTask != nil && c.openTask.ID == ref.ID:
-		c.openTask = nil
+	case (ref.State == "input-required" || ref.State == "auth-required") && (own || ref.ContextID == t.contextID):
+		t.openTask = &taskState{ID: ref.ID, State: ref.State}
+	case t.openTask != nil && t.openTask.ID == ref.ID:
+		t.openTask = nil
 	}
 }
 

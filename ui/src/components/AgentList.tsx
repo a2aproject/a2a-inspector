@@ -26,10 +26,12 @@ interface Props {
   /** Opens a new card in the editor. */
   onNewCard: () => void;
   onClose: () => void;
+  /** The host agent's entry. */
+  host: { selected: boolean; model?: string; delegates: number; onSelect: () => void };
 }
 
 export function AgentList(props: Props) {
-  const { id, hidden, agents, selectedId, onAdd, onSelect, onRemove, onClose } = props;
+  const { id, hidden, agents, selectedId, onAdd, onSelect, onRemove, onClose, host } = props;
   const echoes = agents.filter((a) => a.echo);
   const saved = agents.filter((a) => !a.echo);
   const [url, setUrl] = useState('');
@@ -101,6 +103,21 @@ export function AgentList(props: Props) {
       <p role="status" className={props.notice?.error ? 'small error-text' : 'faint small'}>
         {props.notice?.text}
       </p>
+      <h3 className="list-heading" id={`${inputId}-host`}>
+        Host agent
+      </h3>
+      <ul className="agent-list" aria-labelledby={`${inputId}-host`}>
+        <li className={host.selected ? 'selected' : undefined}>
+          <button type="button" className="agent-item" aria-current={host.selected ? 'true' : undefined} onClick={host.onSelect}>
+            <span className="agent-name">Host agent</span>
+            <span className="agent-url">{host.model ?? 'LLM orchestration'}</span>
+            <span className="status">
+              <span className={host.model ? 'dot dot-pass' : 'dot'} aria-hidden="true" />
+              {host.model ? `Delegates to ${host.delegates} ${host.delegates === 1 ? 'agent' : 'agents'}` : 'Off'}
+            </span>
+          </button>
+        </li>
+      </ul>
       {echoes.length > 0 && (
         <>
           <h3 className="list-heading" id={`${inputId}-echoes`}>
@@ -111,15 +128,15 @@ export function AgentList(props: Props) {
               <AgentItem key={agent.id} agent={agent} selected={agent.id === selectedId} onSelect={onSelect} onRemove={onRemove} />
             ))}
           </ul>
-          <h3 className="list-heading" id={`${inputId}-saved`}>
-            Saved agents
-          </h3>
         </>
       )}
+      <h3 className="list-heading" id={`${inputId}-saved`}>
+        Saved agents
+      </h3>
       {saved.length === 0 ? (
         <p className="muted small">No agents yet.</p>
       ) : (
-        <ul className="agent-list" aria-labelledby={echoes.length ? `${inputId}-saved` : undefined}>
+        <ul className="agent-list" aria-labelledby={`${inputId}-saved`}>
           {saved.map((agent) => (
             <AgentItem key={agent.id} agent={agent} selected={agent.id === selectedId} onSelect={onSelect} onRemove={onRemove} />
           ))}

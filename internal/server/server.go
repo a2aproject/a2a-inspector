@@ -40,6 +40,7 @@ import (
 	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"github.com/a2aproject/a2a-inspector/internal/serve"
 	"golang.org/x/time/rate"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -67,8 +68,8 @@ type Options struct {
 	Limits Limits
 	// Egress, if set, limits which addresses the inspector connects to.
 	Egress *egress.Policy
-	// Logger, if set, receives hosted-mode events: sessions and blocked
-	// destinations. It never gets traffic.
+	// Logger, if set, receives hosted-mode events: sessions, blocked
+	// destinations and the host agent's model errors. It never gets traffic.
 	Logger *log.Logger
 	// AgentCardURL, if set, is the agent the UI opens on start.
 	AgentCardURL string
@@ -98,6 +99,10 @@ type Options struct {
 	// Catalog, if set, is an AI Catalog file or URL whose agents every user
 	// sees. It's read when the server starts.
 	Catalog string
+	// HostModel, if set, is the LLM of the host agent, which delegates to
+	// the user's agents. Without it, HostUnavailable says why to the UI.
+	HostModel       model.LLM
+	HostUnavailable string
 }
 
 // Preferences choose among a card's interfaces, from --transport and --a2a-version.
@@ -238,6 +243,9 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.withConnection(s.handleDeletePushConfig))
 	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.withConnection(s.handleExtendedCard))
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
+	if opts.HostModel != nil {
+		s.mux.HandleFunc("POST /api/host/messages:stream", s.handleHostStream)
+	}
 	if s.echo != nil {
 		s.mux.HandleFunc("POST /api/serve", s.handleServe)
 		s.mux.HandleFunc("GET /api/serve", s.handleListServe)
@@ -300,7 +308,13 @@ func (s *Server) sweepSessions() {
 // request, or when the connection is removed, its session ends or the
 // server closes.
 func (s *Server) callContext(r *http.Request, conn *connection) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(r.Context())
+	return linkContext(r.Context(), conn)
+}
+
+// linkContext returns a context that ends with ctx, or when the connection
+// is removed, its session ends or the server closes.
+func linkContext(ctx context.Context, conn *connection) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(conn.ctx, cancel)
 	return ctx, func() {
 		stop()
