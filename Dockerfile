@@ -16,10 +16,11 @@ COPY inspector/ inspector/
 COPY internal/ internal/
 COPY ui/embed.go ui/
 COPY --from=ui /src/ui/dist ui/dist
-ARG VERSION=dev
-ARG COMMIT=none
+# Without VERSION, the binary reports the release in inspector/version.go.
+ARG VERSION
+ARG COMMIT
 RUN CGO_ENABLED=0 go build -trimpath -o /a2a-inspector \
-    -ldflags="-s -w -X github.com/a2aproject/a2a-inspector/inspector.version=${VERSION} -X github.com/a2aproject/a2a-inspector/inspector.commit=${COMMIT}" .
+    -ldflags="-s -w ${VERSION:+-X github.com/a2aproject/a2a-inspector/inspector.version=$VERSION} ${COMMIT:+-X github.com/a2aproject/a2a-inspector/inspector.commit=$COMMIT}" .
 
 # Stage 3: run it.
 FROM gcr.io/distroless/static-debian12:nonroot

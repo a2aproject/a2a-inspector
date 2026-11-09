@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # Lints the end-to-end tests too.
+  build-tags:
+    - e2e
+
 formatters:
   enable:
     - goimports

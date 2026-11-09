@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +83,30 @@ var clientFlags = []string{"trusted-proxies", "client-max-sessions", "client-egr
 // hosted inspector doesn't have.
 var startupFlags = []string{"agent-card", "endpoint", "transport", "a2a-version", "auth", "svc-param", "webhook-url"}
 
+// pluginName is the command the a2a CLI runs the inspector as: a2a inspector.
+const pluginName = "inspector"
+
+// pluginInfo is what the a2a CLI reads from `a2a-inspector info` to list the
+// inspector among its command plugins.
+type pluginInfo struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+}
+
+func newInfoCommand(description string) *cobra.Command {
+	return &cobra.Command{
+		Use:    "info",
+		Short:  "Print the inspector's name, version and description for the a2a CLI, as JSON",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			v, _, _ := buildInfo()
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(pluginInfo{Name: pluginName, Version: v, Description: description})
+		},
+	}
+}
+
 func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string) error) *cobra.Command {
 	var f flags
 	cmd := &cobra.Command{
@@ -101,6 +126,10 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 	}
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}")
 	cmd.SetOut(stdout)
+	cmd.AddCommand(newInfoCommand(cmd.Short))
+	// The only subcommand is for the a2a CLI, so --help lists none.
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	cmd.SetHelpCommand(&cobra.Command{Hidden: true})
 	fs := cmd.Flags()
 	fs.StringVarP(&f.agentCard, "agent-card", "a", "", "Agent Card to open on start: host/origin or full card URL")
 	fs.StringVarP(&f.endpoint, "endpoint", "e", "", "Agent interface URL to open on start without a card; requires a single --transport flag")

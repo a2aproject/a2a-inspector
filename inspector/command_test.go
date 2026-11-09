@@ -251,6 +251,41 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestPluginInfo(t *testing.T) {
+	defer func(v string) { version = v }(version)
+	version = "1.2.3"
+	out := &syncBuffer{}
+	cmd := newCommand(Options{}, out, &syncBuffer{}, nil)
+	cmd.SetArgs([]string{"info"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var info pluginInfo
+	if err := json.Unmarshal([]byte(out.String()), &info); err != nil {
+		t.Fatalf("info printed %q: %v", out.String(), err)
+	}
+	if want := (pluginInfo{Name: "inspector", Version: "1.2.3", Description: cmd.Short}); info != want {
+		t.Errorf("info = %+v, want %+v", info, want)
+	}
+
+	// Without a version from the build, the release is reported.
+	version = ""
+	if v, _, _ := buildInfo(); v == "" || v == "dev" {
+		t.Errorf("version without ldflags = %q", v)
+	}
+
+	// The subcommand is for the a2a CLI, so the help lists none.
+	help := &syncBuffer{}
+	cmd = newCommand(Options{}, help, &syncBuffer{}, nil)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(help.String(), "Available Commands") {
+		t.Errorf("--help lists commands:\n%s", help)
+	}
+}
+
 func TestCatalogFlag(t *testing.T) {
 	for _, f := range []flags{{catalog: "agents.json"}, {hosted: true, catalog: "agents.json"}} {
 		if so, err := serverOptions(Options{}, f); err != nil || so.Catalog != "agents.json" {
