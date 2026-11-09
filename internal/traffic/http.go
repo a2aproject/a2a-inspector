@@ -64,6 +64,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	id := t.Log.add(&Entry{
 		ConnectionID: call.ConnectionID,
 		Origin:       call.Origin,
+		ResentFrom:   call.ResentFrom,
 		HTTP: &HTTPExchange{
 			Method:         out.Method,
 			URL:            out.URL.String(),

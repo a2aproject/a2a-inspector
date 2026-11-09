@@ -90,9 +90,10 @@ type GRPCExchange struct {
 type Entry struct {
 	ID           string `json:"id"`
 	ConnectionID string `json:"connectionId,omitempty"`
-	// Origin is the Call's.
-	Origin    string    `json:"origin,omitempty"`
-	StartTime time.Time `json:"startTime"`
+	// Origin and ResentFrom are the Call's.
+	Origin     string    `json:"origin,omitempty"`
+	ResentFrom string    `json:"resentFrom,omitempty"`
+	StartTime  time.Time `json:"startTime"`
 	// DurationMs is set once the exchange is over.
 	DurationMs *int64 `json:"durationMs"`
 	// Error is set when no response arrived or the response broke off.

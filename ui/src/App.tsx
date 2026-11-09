@@ -30,7 +30,9 @@ import type {
   HostAgentRef,
   HostEvent,
   ListTasksQuery,
+  ResendRequest,
   SendRequest,
+  TrafficEntry,
 } from './api/types';
 import { asObject, asObjects } from './card';
 import { agentsFromCatalog, loadAgents, saveAgents, toCatalog } from './catalog';
@@ -426,6 +428,10 @@ export function App() {
   }
 
   const validateCard = useCallback((card: unknown) => retryRenewed(() => api.validateCard(card)), []);
+  const resend = useCallback(
+    (entryId: string, req: ResendRequest, onResult: (result: AgentResult) => void, signal: AbortSignal) => api.resend(entryId, req, onResult, signal),
+    [],
+  );
 
   /** Saves the card and serves it as an echo agent, which replaces the card's earlier ones and opens in the chat. */
   async function serveCard(agent: AgentEntry, card: unknown, iface: ServedInterface): Promise<ServeOutcome> {
@@ -744,6 +750,11 @@ export function App() {
   const trafficScope: TrafficScope = hostSelected
     ? { label: 'Only the host agent', match: (e) => e.origin === 'host' }
     : { label: 'Only the selected agent', match: (e) => !!selected?.connection && e.connectionId === selected.connection.id };
+  // An entry is resent on its agent's current connection, which has the current settings.
+  const resendTarget = (entry: TrafficEntry) => {
+    const current = entry.connectionId ? agents.find((a) => a.connectionIds.includes(entry.connectionId!))?.connection : undefined;
+    return current && { connectionId: current.id, binding: current.interface.protocolBinding };
+  };
 
   return (
     <div className="app">
@@ -1002,6 +1013,8 @@ export function App() {
                       scope={trafficScope}
                       expandedId={trafficEntry}
                       onExpand={setTrafficEntry}
+                      resendTarget={resendTarget}
+                      onResend={resend}
                     />
                   ),
                 },

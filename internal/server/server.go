@@ -243,6 +243,7 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/connections/{id}/tasks/{task}/pushNotificationConfigs/{config}", s.withConnection(s.handleDeletePushConfig))
 	s.mux.HandleFunc("GET /api/connections/{id}/extendedAgentCard", s.withConnection(s.handleExtendedCard))
 	s.mux.HandleFunc("GET /api/traffic", s.handleTraffic)
+	s.mux.HandleFunc("POST /api/traffic/{id}", s.handleTrafficAction)
 	if opts.HostModel != nil {
 		s.mux.HandleFunc("POST /api/host/messages:stream", s.handleHostStream)
 	}

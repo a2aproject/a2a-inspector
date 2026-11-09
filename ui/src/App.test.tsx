@@ -377,6 +377,77 @@ describe('App', () => {
       expect(screen.getByText('Bearer ••••')).toBeInTheDocument();
     });
 
+    it('edits and resends a captured request', async () => {
+      const entry: TrafficEntry = {
+        id: 'tr-2',
+        connectionId: 'conn-1',
+        startTime: '2026-10-21T10:00:00Z',
+        durationMs: 5,
+        http: {
+          method: 'POST',
+          url: 'http://localhost:9999/a2a',
+          requestHeaders: [{ name: 'Authorization', value: 'Bearer ••••' }],
+          requestBody: '{"jsonrpc":"2.0","method":"SendMessage","params":{"text":"hi"}}',
+          status: 200,
+          responseBody: '{"jsonrpc":"2.0","result":{}}',
+        },
+      };
+      const resent: TrafficEntry = { ...entry, id: 'tr-3', resentFrom: 'tr-2', startTime: '2026-10-21T10:01:00Z' };
+      const answer = { ...result(task('TASK_STATE_COMPLETED', 'echo: resent')), call: { trafficEntryId: 'tr-3', latencyMs: 3, error: null } };
+      const live = liveSse();
+      const { fetch, user } = await openAgent({
+        '/api/traffic': () => sse([{ event: 'snapshot', data: { entries: [entry, resent] } }]),
+        '/api/connections': () => json(connection, 201),
+        '/api/connections/conn-1/messages:send': () => json(result(task('TASK_STATE_COMPLETED', 'echo: hi'))),
+        '/api/traffic/tr-2:resend': () => live.response,
+      });
+      await user.click(screen.getByRole('checkbox', { name: 'Stream' }));
+      await user.type(screen.getByRole('textbox', { name: 'Message' }), 'hi{Enter}');
+      await user.click(await screen.findByRole('button', { name: 'Wire traffic' }));
+
+      await user.click(screen.getByRole('button', { name: 'Edit and resend' }));
+      const editor = within(screen.getByRole('region', { name: 'Edit and resend' }));
+      expect(editor.getByRole('textbox', { name: 'URL' })).toHaveValue('http://localhost:9999/a2a');
+      expect(editor.getByRole('textbox', { name: 'Header 1 value' })).toHaveValue('Bearer ••••');
+      expect(editor.getByText(/filled in with the connection's credentials/)).toBeInTheDocument();
+      const bodyField = editor.getByRole('textbox', { name: 'Body' });
+      expect(bodyField).toHaveValue(JSON.stringify(JSON.parse(entry.http!.requestBody), null, 2));
+      fireEvent.change(bodyField, { target: { value: '{"jsonrpc":"2.0","method":"SendMessage","params":{"text":"resent"}}' } });
+      await user.click(editor.getByRole('button', { name: 'Add header' }));
+      await user.type(editor.getByRole('textbox', { name: 'Header 2 name' }), 'X-Trace');
+      await user.type(editor.getByRole('textbox', { name: 'Header 2 value' }), 't-2');
+      await user.click(editor.getByRole('button', { name: 'Send' }));
+
+      expect(await editor.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
+      expect(body(fetch, '/api/traffic/tr-2:resend')).toEqual({
+        connectionId: 'conn-1',
+        http: {
+          method: 'POST',
+          url: 'http://localhost:9999/a2a',
+          headers: [
+            { name: 'Authorization', value: 'Bearer ••••' },
+            { name: 'X-Trace', value: 't-2' },
+          ],
+          body: '{"jsonrpc":"2.0","method":"SendMessage","params":{"text":"resent"}}',
+        },
+      });
+      act(() => live.send('message', answer));
+      const results = within(await editor.findByRole('list', { name: 'Answer' }));
+      expect(await results.findByText('echo: resent')).toBeInTheDocument();
+
+      // Stop ends the request without an error.
+      await user.click(editor.getByRole('button', { name: 'Stop' }));
+      act(() => live.fail());
+      expect(await editor.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+      expect(editor.queryByRole('alert')).not.toBeInTheDocument();
+
+      // The answer links to the new entry, which links back.
+      await user.click(results.getByRole('button', { name: 'Wire traffic' }));
+      expect(screen.getByRole('button', { name: /POST \/a2a.*resent/ })).toHaveAttribute('aria-expanded', 'true');
+      await user.click(screen.getByRole('button', { name: 'tr-2' }));
+      expect(screen.getByRole('region', { name: 'Edit and resend' })).toBeInTheDocument();
+    });
+
     it('reconnects with the stored secret when the settings change', async () => {
       let n = 0;
       const { fetch, user } = await openAgent({

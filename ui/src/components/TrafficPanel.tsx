@@ -1,7 +1,8 @@
-import { useId, useState } from 'react';
-import type { TrafficEntry, WireHeader } from '../api/types';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { AgentResult, ResendRequest, TrafficEntry, WireHeader } from '../api/types';
 import { entryStatus, entryTitle } from '../traffic';
 import { JsonBlock } from './JsonBlock';
+import { draftOf, ResendEditor, type ResendDraft, resendRequest, type ResendState } from './ResendEditor';
 
 /** The entries the filter keeps, and its label. */
 export interface TrafficScope {
@@ -17,12 +18,50 @@ interface Props {
   /** The entry to show expanded, for example one the chat links to. */
   expandedId?: string;
   onExpand: (id: string | undefined) => void;
+  /** The connection to resend an entry on, the agent's current one, and its binding; none when it can't be resent. */
+  resendTarget?: (entry: TrafficEntry) => { connectionId: string; binding: string } | undefined;
+  onResend?: (entryId: string, req: ResendRequest, onResult: (result: AgentResult) => void, signal: AbortSignal) => Promise<void>;
 }
 
 /** The wire-level log of every request to and response from agents. */
-export function TrafficPanel({ entries, live, scope, expandedId, onExpand }: Props) {
+export function TrafficPanel({ entries, live, scope, expandedId, onExpand, resendTarget, onResend }: Props) {
   const id = useId();
   const [onlyAgent, setOnlyAgent] = useState(false);
+  // Resends by the ID of the entry they copy; they outlast collapsing the entry.
+  const [resends, setResends] = useState<Record<string, ResendState>>({});
+  const controllers = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    const running = controllers.current;
+    return () => running.forEach((c) => c.abort());
+  }, []);
+  const update = (entryId: string, change: (s: ResendState) => ResendState) =>
+    setResends((all) => {
+      const s = all[entryId];
+      return s ? { ...all, [entryId]: change(s) } : all;
+    });
+
+  async function send(entry: TrafficEntry, draft: ResendDraft) {
+    const target = resendTarget?.(entry);
+    if (!onResend || !target) return;
+    let req: ResendRequest;
+    try {
+      req = resendRequest(entry, draft, target.connectionId);
+    } catch (err) {
+      update(entry.id, (s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
+      return;
+    }
+    const controller = new AbortController();
+    controllers.current.set(entry.id, controller);
+    update(entry.id, (s) => ({ ...s, running: true, results: [], error: undefined }));
+    try {
+      await onResend(entry.id, req, (r) => update(entry.id, (s) => ({ ...s, results: [...s.results, r] })), controller.signal);
+    } catch (err) {
+      if (!controller.signal.aborted) update(entry.id, (s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      controllers.current.delete(entry.id);
+      update(entry.id, (s) => ({ ...s, running: false }));
+    }
+  }
   // Entries that started at or before this time (ms) are hidden.
   const [clearedBefore, setClearedBefore] = useState<number>();
   const shown = entries
@@ -70,6 +109,7 @@ export function TrafficPanel({ entries, live, scope, expandedId, onExpand }: Pro
                   <span className={`chip chip-${status.level}`}>{status.label}</span>
                   <span className="mono traffic-title">{entryTitle(e)}</span>
                   {e.origin === 'host' && <span className="pill">host agent</span>}
+                  {e.resentFrom && <span className="pill">resent</span>}
                   <span className="faint small nowrap">
                     {e.durationMs === null ? 'open' : `${e.durationMs} ms`}
                     {e.http?.sseFrames?.length ? ` · ${e.http.sseFrames.length} events` : ''}
@@ -77,7 +117,33 @@ export function TrafficPanel({ entries, live, scope, expandedId, onExpand }: Pro
                 </button>
                 {expanded && (
                   <div id={`${id}-${e.id}`} className="traffic-detail">
-                    <EntryDetail entry={e} />
+                    <EntryDetail
+                      entry={e}
+                      onShowEntry={onExpand}
+                      onEdit={
+                        onResend && resendTarget?.(e) && !resends[e.id]
+                          ? () => setResends((all) => ({ ...all, [e.id]: { draft: draftOf(e), running: false, results: [] } }))
+                          : undefined
+                      }
+                    />
+                    {resends[e.id] && (
+                      <ResendEditor
+                        entry={e}
+                        state={resends[e.id]!}
+                        binding={resendTarget?.(e)?.binding ?? (e.grpc ? 'GRPC' : 'JSONRPC')}
+                        onChange={(draft) => update(e.id, (s) => ({ ...s, draft }))}
+                        onSend={() => void send(e, resends[e.id]!.draft)}
+                        onStop={() => controllers.current.get(e.id)?.abort()}
+                        onClose={() =>
+                          setResends((all) => {
+                            const rest = { ...all };
+                            delete rest[e.id];
+                            return rest;
+                          })
+                        }
+                        onShowTraffic={onExpand}
+                      />
+                    )}
                   </div>
                 )}
               </li>
@@ -112,13 +178,35 @@ function Headers({ title, headers }: { title: string; headers: WireHeader[] | un
   );
 }
 
-function EntryDetail({ entry }: { entry: TrafficEntry }) {
+interface DetailProps {
+  entry: TrafficEntry;
+  onShowEntry: (id: string) => void;
+  /** Opens the resend editor; unset when the entry can't be resent or the editor is open. */
+  onEdit?: () => void;
+}
+
+function EntryDetail({ entry, onShowEntry, onEdit }: DetailProps) {
   const meta = (
-    <p className="faint small">
-      {entry.id} · {new Date(entry.startTime).toLocaleTimeString()}
-      {entry.connectionId ? ` · ${entry.connectionId}` : ' · card request'}
-      {entry.origin === 'host' && ' · sent by the host agent'}
-    </p>
+    <div className="traffic-meta">
+      <p className="faint small">
+        {entry.id} · {new Date(entry.startTime).toLocaleTimeString()}
+        {entry.connectionId ? ` · ${entry.connectionId}` : ' · card request'}
+        {entry.origin === 'host' && ' · sent by the host agent'}
+        {entry.resentFrom && (
+          <>
+            {' · resent from '}
+            <button type="button" className="link-button" onClick={() => onShowEntry(entry.resentFrom!)}>
+              {entry.resentFrom}
+            </button>
+          </>
+        )}
+      </p>
+      {onEdit && (
+        <button type="button" className="button button-quiet" onClick={onEdit}>
+          Edit and resend
+        </button>
+      )}
+    </div>
   );
   const error = entry.error && (
     <p role="note" className="notice notice-error small">

@@ -8,7 +8,6 @@
             "versioning": "prerelease",
             "prerelease": true,
             "prerelease-type": "alpha",
-            "release-as": "1.0.0-alpha.1",
             "extra-files": ["README.md"]
         }
     }

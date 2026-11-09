@@ -48,6 +48,7 @@ func (l *Log) startGRPC(ctx context.Context, cc *grpc.ClientConn, method string)
 	id := l.add(&Entry{
 		ConnectionID: call.ConnectionID,
 		Origin:       call.Origin,
+		ResentFrom:   call.ResentFrom,
 		GRPC: &GRPCExchange{
 			Target:     cc.Target(),
 			FullMethod: method,
