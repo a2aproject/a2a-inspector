@@ -44,6 +44,10 @@ go install github.com/a2aproject/a2a-inspector@v1.0.0-alpha.1
 
 Or run it from a clone of this repository with `go run .`.
 
+**As an a2a CLI plugin**
+
+With `a2a-inspector` on your `PATH`, the [a2a CLI](https://github.com/a2aproject/a2a-cli) runs it as `a2a inspector`, with the same flags, and lists it in `a2a plugin list` and `a2a --help`.
+
 **Docker**
 
 ```bash

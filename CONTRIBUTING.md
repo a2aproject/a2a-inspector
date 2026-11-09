@@ -37,10 +37,16 @@ golangci-lint run
 cd ui && npm run lint && npm run typecheck && npm test
 ```
 
+The end-to-end smoke test builds the binary, runs it against an echo agent and drives its API as the UI does:
+
+```sh
+go test -tags e2e ./e2e/...
+```
+
 A UI change needs `ui/dist` rebuilt with `npm run build` in `ui/` and committed with it; CI checks that it's up to date. The Development section of the README has the rest.
 
 ## Releases
 
-Releases are cut by [release-please](https://github.com/googleapis/release-please) from the Conventional Commits on `main`: it keeps a release pull request up to date, and merging it tags the release and updates `CHANGELOG.md` and the version in the README. [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`) then attaches the binaries for Linux, macOS and Windows with their checksums, and `docker-publish.yml` publishes the image tagged with the version. For a release that isn't a prerelease, GoReleaser also opens a pull request with the Homebrew formula in the `a2aproject/a2a-cli` tap. The winget manifest is generated but not published until someone has run the inspector on Windows. Try the build locally with `goreleaser release --snapshot --clean --skip=publish`.
+Releases are cut by [release-please](https://github.com/googleapis/release-please) from the Conventional Commits on `main`: it keeps a release pull request up to date, and merging it tags the release and updates `CHANGELOG.md` and the version in the README and `inspector/version.go`, which builds without one of their own report. [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`) then attaches the binaries for Linux, macOS and Windows with their checksums, and `docker-publish.yml` publishes the image tagged with the version. For a release that isn't a prerelease, GoReleaser also opens a pull request with the Homebrew formula in the `a2aproject/a2a-cli` tap. The winget manifest is generated but not published until someone has run the inspector on Windows. Try the build locally with `goreleaser release --snapshot --clean --skip=publish`.
 
 Until 1.0.0, releases are prereleases: `release-please-config.json` sets `"prerelease": true` and `"versioning": "prerelease"`, so every release after `1.0.0-alpha.1` bumps the last number, such as `1.0.0-alpha.2`. For 1.0.0, set `release-as` to `1.0.0` and remove the prerelease settings.

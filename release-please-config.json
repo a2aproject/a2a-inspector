@@ -8,7 +8,7 @@
             "versioning": "prerelease",
             "prerelease": true,
             "prerelease-type": "alpha",
-            "extra-files": ["README.md"]
+            "extra-files": ["README.md", "inspector/version.go"]
         }
     }
 }

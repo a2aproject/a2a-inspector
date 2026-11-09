@@ -24,6 +24,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # main is published as latest, and a release as its tag, such as v1.0.0.
+      # Without a version, main's image reports the latest release.
       - name: Pick the image tag
         id: tag
         env:
@@ -34,7 +35,6 @@ jobs:
             echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
-            echo "version=dev" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push Docker image

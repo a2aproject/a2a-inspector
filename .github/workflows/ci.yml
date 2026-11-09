@@ -29,6 +29,20 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+  e2e:
+    name: End-to-end smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Builds the binary, runs it against an echo agent and drives its API.
+      - name: Smoke test
+        run: go test -tags e2e -count=1 -v ./e2e/...
+
   lint:
     # The check name main's branch protection requires.
     name: Lint Code Base

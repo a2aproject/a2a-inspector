@@ -15,15 +15,22 @@
 package inspector
 
 import (
+	"cmp"
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 )
+
+// release is the latest release, which release-please updates in the
+// release's own commit. Builds with no other version report it, such as
+// those without Go module information or from a Docker build of main.
+const release = "1.0.0-alpha.1" // x-release-please-version
 
 // Build metadata, which release builds set with -ldflags "-X". Other builds
 // read the module version and VCS stamp of the binary.
 var (
-	version = "dev"
+	version string
 	commit  = "none"
 	date    = "unknown"
 )
@@ -32,12 +39,12 @@ var (
 // inspector, the binary's module version and VCS stamp are the program's.
 const modulePath = "github.com/a2aproject/a2a-inspector"
 
-// versionText is what --version prints after the command name.
-func versionText() string {
-	v, c, d := version, commit, date
+// buildInfo returns the inspector's version, commit and build time.
+func buildInfo() (v, c, d string) {
+	v, c, d = version, commit, date
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Path == modulePath {
-		if v == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-			v = bi.Main.Version
+		if v == "" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			v = strings.TrimPrefix(bi.Main.Version, "v")
 		}
 		vcs := map[string]string{}
 		for _, s := range bi.Settings {
@@ -53,5 +60,11 @@ func versionText() string {
 			d = vcs["vcs.time"]
 		}
 	}
+	return cmp.Or(v, release), c, d
+}
+
+// versionText is what --version prints after the command name.
+func versionText() string {
+	v, c, d := buildInfo()
 	return fmt.Sprintf("%s\ncommit:  %s\nbuilt:   %s\ngo:      %s\nos/arch: %s/%s\n", v, c, d, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
