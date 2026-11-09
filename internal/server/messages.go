@@ -484,7 +484,8 @@ func (s *Server) httpPayload(entry *traffic.Entry, version, binding string, kind
 	if h.Status < 200 || h.Status > 299 {
 		return nil, httpError(h.Status, body, err)
 	}
-	if kind == empty {
+	// A JSON-RPC error comes with 200, so an empty result is read for one.
+	if kind == empty && binding != agents.BindingJSONRPC {
 		return nil, nil
 	}
 	var findings []validate.Finding
@@ -534,11 +535,12 @@ func (s *Server) jsonrpcPayload(body []byte, version, binding string, kind valid
 	if env.Error != nil && string(env.Error) != "null" {
 		return nil, jsonrpcError(env.Error)
 	}
-	if env.Result == nil {
-		return nil, &callError{Message: "The JSON-RPC response has neither a result nor an error.", Raw: json.RawMessage(body)}
-	}
+	// A missing empty result is one of the envelope's findings.
 	if kind == empty {
 		return nil, nil
+	}
+	if env.Result == nil {
+		return nil, &callError{Message: "The JSON-RPC response has neither a result nor an error.", Raw: json.RawMessage(body)}
 	}
 	p := s.payload(env.Result, version, binding, kind)
 	p.Validation = validate.Merge(p.Validation, validate.JSONRPCEnvelope(body, requestID)...)
@@ -567,7 +569,7 @@ func (s *Server) eventPayload(data []byte, binding, version string, requestID js
 func (s *Server) grpcPayload(entry *traffic.Entry, version, binding string, kind validate.PayloadKind, err error) (*agentPayload, *callError) {
 	g := entry.GRPC
 	if g.StatusCode != codes.OK.String() {
-		ce := &callError{A2AError: a2aErrorName(err), Message: cmp.Or(g.StatusMessage, entry.Error, errMessage(err)), rejected: true}
+		ce := &callError{A2AError: cmp.Or(a2aErrorName(err), grpcReason(err)), Message: cmp.Or(g.StatusMessage, entry.Error, errMessage(err)), rejected: true}
 		if c, ok := grpcCode(g.StatusCode); ok {
 			ce.Code = int(c)
 			ce.Raw = map[string]any{"code": g.StatusCode, "message": g.StatusMessage, "trailers": g.Trailers}

@@ -374,12 +374,23 @@ export interface TrafficEntry {
   connectionId?: string;
   /** "host" for calls the host agent made. */
   origin?: string;
+  /** The entry whose request this one sent again, edited. */
+  resentFrom?: string;
   startTime: string;
   /** Null while the exchange is in progress. */
   durationMs: number | null;
   error?: string;
   http?: HTTPExchange;
   grpc?: GRPCExchange;
+}
+
+/** An edited copy of a traffic entry's request, with http or grpc as the entry has. */
+export interface ResendRequest {
+  /** The connection to send it on; by default the entry's. */
+  connectionId?: string;
+  http?: { method: string; url: string; headers: WireHeader[]; body: string };
+  /** Goes to the entry's method on the connection's target. */
+  grpc?: { metadata: WireHeader[]; message: unknown };
 }
 
 /** An agent the host agent can delegate to, through one of the UI's connections. */

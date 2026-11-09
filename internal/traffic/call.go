@@ -26,6 +26,8 @@ type Call struct {
 	ConnectionID string
 	// Origin is OriginHost for the host agent's calls, and empty for the user's.
 	Origin string
+	// ResentFrom is the entry whose request the call sends again, edited.
+	ResentFrom string
 	// Secrets are values masked wherever they appear in headers or metadata.
 	Secrets []string
 	// Headers are the names of the headers the user configured for the

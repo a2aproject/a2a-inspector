@@ -130,7 +130,7 @@ func (d *Dialer) factory(binding, version string) a2aclient.TransportFactory {
 		})
 	case [2]string{BindingGRPC, Version10}:
 		return fn(func(_ context.Context, _ *a2a.AgentCard, iface *a2a.AgentInterface) (a2aclient.Transport, error) {
-			conn, err := d.grpcConn(iface.URL)
+			conn, err := d.GRPCConn(iface.URL)
 			if err != nil {
 				return nil, err
 			}
@@ -138,7 +138,7 @@ func (d *Dialer) factory(binding, version string) a2aclient.TransportFactory {
 		})
 	case [2]string{BindingGRPC, Version03}:
 		return fn(func(_ context.Context, _ *a2a.AgentCard, iface *a2a.AgentInterface) (a2aclient.Transport, error) {
-			conn, err := d.grpcConn(iface.URL)
+			conn, err := d.GRPCConn(iface.URL)
 			if err != nil {
 				return nil, err
 			}
@@ -148,7 +148,9 @@ func (d *Dialer) factory(binding, version string) a2aclient.TransportFactory {
 	return nil
 }
 
-func (d *Dialer) grpcConn(rawURL string) (*grpc.ClientConn, error) {
+// GRPCConn returns a gRPC client connection to an interface URL, with the
+// dialer's options and egress policy. The caller closes it.
+func (d *Dialer) GRPCConn(rawURL string) (*grpc.ClientConn, error) {
 	target, secure := GRPCTarget(rawURL)
 	creds := insecure.NewCredentials()
 	if secure {

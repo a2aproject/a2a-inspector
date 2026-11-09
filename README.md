@@ -21,7 +21,7 @@ The **A2A Inspector** (`a2a-inspector`) is a web-based tool for developers of [A
 - **Chat:** sends or streams messages with text, files, data and metadata, or a raw message. Conversations and tasks waiting for input continue across messages.
 - **Tasks and push notifications:** gets, lists, cancels and subscribes to tasks, manages push notification configs and receives notifications at its own webhook.
 - **Auth:** bearer, basic and API key presets and custom headers. Secrets stay in the inspector's backend.
-- **Traffic:** every HTTP exchange and gRPC call as it went over the wire, with each response validated.
+- **Traffic:** every HTTP exchange and gRPC call as it went over the wire, with each response validated. Any request to an agent can be edited and sent again.
 - **Saved agents and AI Catalogs:** agents are saved in the browser as an [AI Catalog](https://ai-catalog.io/), export and import as a catalog file, and can be added from any catalog URL.
 - **Card editor:** writes and edits cards with suggestions and documentation from the card schema and the inspector's checks as you type, and serves a card as a local echo agent to talk to.
 - **Host agent:** an LLM agent built with [adk-go](https://github.com/google/adk-go) that answers you by delegating to your agents, with its calls in the traffic log.
@@ -72,6 +72,8 @@ a2a-inspector --catalog ai-catalog.json
 ```
 
 The inspector prints a URL with a per-run token, which the browser exchanges for a session cookie. Run with `--help` for all the flags.
+
+**Edit and resend**, on an exchange in the Traffic tab, sends a copy of its request as you edit it: the method, URL, headers and body, or for gRPC the metadata and the message. It goes out as written, so it can also be a request the inspector wouldn't send, such as one with malformed JSON. Values masked as `••••` are filled in with the connection's credentials, only for requests to the agent's own address. The request goes through the agent's current connection, the answer is validated for the operation the request names and shows under the editor and as a new exchange, and it doesn't change the chat's conversation.
 
 Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 

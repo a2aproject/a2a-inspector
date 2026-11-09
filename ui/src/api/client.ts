@@ -16,6 +16,7 @@ import type {
   HostRequest,
   ListTasksQuery,
   PushConfigRequest,
+  ResendRequest,
   SendRequest,
   ServeRequest,
 } from './types';
@@ -192,6 +193,9 @@ export const api = {
   deletePushConfig: (id: string, taskId: string, configId: string) =>
     request<AgentResult>(`${pushConfigs(id, taskId)}/${encodeURIComponent(configId)}`, { method: 'DELETE' }),
   extendedCard: (id: string) => request<AgentResult>(`${conn(id)}/extendedAgentCard`),
+  /** Sends an edited copy of a traffic entry's request; resolves when the answer ends. */
+  resend: (entryId: string, req: ResendRequest, onResult: (result: AgentResult) => void, signal?: AbortSignal) =>
+    results(`/api/traffic/${encodeURIComponent(entryId)}:resend`, { ...post(req), signal }, onResult),
   /** Starts an echo agent for a card with a2a-cli. */
   serve: (req: ServeRequest) => request<EchoAgent>('/api/serve', post(req)),
   echoAgents: () => request<{ agents: EchoAgent[] }>('/api/serve'),

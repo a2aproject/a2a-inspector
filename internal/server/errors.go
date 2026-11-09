@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // a2aErrors names the errors a2a-go reports, as the specification names them.
@@ -138,6 +139,21 @@ func httpError(status int, body []byte, err error) *callError {
 		ce.Message = fmt.Sprintf("The agent answered %d %s.", status, http.StatusText(status))
 	}
 	return ce
+}
+
+// grpcReason names a gRPC status error after the first ErrorInfo reason in
+// its details, for errors a2a-go didn't convert, such as those of a resent call.
+func grpcReason(err error) string {
+	st, ok := grpcstatus.FromError(err)
+	if !ok || err == nil {
+		return ""
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(interface{ GetReason() string }); ok && info.GetReason() != "" {
+			return reasonName(info.GetReason())
+		}
+	}
+	return ""
 }
 
 type errorDetail struct {
