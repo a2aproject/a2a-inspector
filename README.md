@@ -38,7 +38,7 @@ Download the archive for Linux, macOS or Windows from the [releases](https://git
 
 <!-- x-release-please-start-version -->
 ```bash
-go install github.com/a2aproject/a2a-inspector@v1.0.0-alpha.1
+go install github.com/a2aproject/a2a-inspector@v1.0.0-alpha.2
 ```
 <!-- x-release-please-end -->
 
