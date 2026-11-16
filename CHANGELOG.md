@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.2](https://github.com/a2aproject/a2a-inspector/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-11-09)
+
+
+### Features
+
+* edit and resend requests from the traffic log ([#242](https://github.com/a2aproject/a2a-inspector/issues/242)) ([36045ef](https://github.com/a2aproject/a2a-inspector/commit/36045efe08ea3a94afd74afa99e002bccf0d2b60))
+* list the inspector in a2a plugin list and report its version in every build ([#244](https://github.com/a2aproject/a2a-inspector/issues/244)) ([30c10de](https://github.com/a2aproject/a2a-inspector/commit/30c10de47a22dd5486846cea32d0c096cd854b52))
+
 ## [1.0.0-alpha.1](https://github.com/a2aproject/a2a-inspector/compare/v0.2.0...v1.0.0-alpha.1) (2026-11-06)
 
 

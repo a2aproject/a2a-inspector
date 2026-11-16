@@ -25,7 +25,7 @@ import (
 // release is the latest release, which release-please updates in the
 // release's own commit. Builds with no other version report it, such as
 // those without Go module information or from a Docker build of main.
-const release = "1.0.0-alpha.1" // x-release-please-version
+const release = "1.0.0-alpha.2" // x-release-please-version
 
 // Build metadata, which release builds set with -ldflags "-X". Other builds
 // read the module version and VCS stamp of the binary.
