@@ -17,6 +17,7 @@ package agents
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -53,6 +54,9 @@ type Dialer struct {
 	// Egress, if set, limits where gRPC connections go. HTTPClient's
 	// transport has to apply it to HTTP itself.
 	Egress *egress.Policy
+	// RootCAs, if set, are the certificate authorities gRPC trusts for TLS,
+	// in place of the system's.
+	RootCAs *x509.CertPool
 }
 
 // Supports reports whether the dialer can talk to interfaces with this
@@ -154,7 +158,7 @@ func (d *Dialer) GRPCConn(rawURL string) (*grpc.ClientConn, error) {
 	target, secure := GRPCTarget(rawURL)
 	creds := insecure.NewCredentials()
 	if secure {
-		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: d.RootCAs})
 	}
 	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, d.GRPCDialOptions...)
 	if d.Egress != nil {

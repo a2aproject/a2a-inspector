@@ -79,6 +79,17 @@ The inspector prints a URL with a per-run token, which the browser exchanges for
 
 **Edit and resend**, on an exchange in the Traffic tab, sends a copy of its request as you edit it: the method, URL, headers and body, or for gRPC the metadata and the message. It goes out as written, so it can also be a request the inspector wouldn't send, such as one with malformed JSON. Values masked as `••••` are filled in with the connection's credentials, only for requests to the agent's own address. The request goes through the agent's current connection, the answer is validated for the operation the request names and shows under the editor and as a new exchange, and it doesn't change the chat's conversation.
 
+**Agents with a company CA or a self-signed certificate:** the inspector trusts the system's certificate authorities, so an agent behind an internal CA fails with `certificate signed by unknown authority`. Give it the CA's PEM file, which it trusts in addition to the system's, for HTTPS (agent cards, JSON-RPC, REST, catalogs) and gRPC:
+
+```sh
+a2a-inspector --ca-file ./internal-ca.pem -a https://agent.internal.example.com
+# or, before starting it:
+export A2A_INSPECTOR_CA_FILE=./internal-ca.pem   # several files: separated like PATH
+a2a-inspector -a https://agent.internal.example.com
+```
+
+`--ca-file` is repeatable and takes precedence over the variable. A self-signed agent's own certificate works as its CA. In Docker, mount the file and point the variable at it: `-v $PWD/internal-ca.pem:/ca.pem:ro -e A2A_INSPECTOR_CA_FILE=/ca.pem`. Go's `SSL_CERT_FILE` isn't enough: it's ignored on macOS and Windows, and elsewhere it replaces the system's authorities.
+
 Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 
 ## Saved agents and AI Catalogs

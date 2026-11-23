@@ -17,11 +17,15 @@ package inspector
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -515,4 +519,75 @@ func TestHostedServerOptions(t *testing.T) {
 			t.Errorf("serverOptions(%+v) = %v, want %q", tc.f, err, tc.want)
 		}
 	}
+}
+
+func TestCAFile(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	dir := t.TempDir()
+	good := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(good, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir, "bad.pem")
+	if err := os.WriteFile(bad, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trusts := func(so server.Options) bool {
+		var rt http.RoundTripper = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: so.RootCAs}}
+		if so.Egress != nil {
+			rt = so.Egress.Transport()
+		}
+		resp, err := (&http.Client{Transport: rt}).Get(srv.URL)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return err == nil
+	}
+
+	t.Run("none", func(t *testing.T) {
+		t.Setenv(caFileEnv, "")
+		so, err := serverOptions(Options{}, flags{})
+		if err != nil || so.RootCAs != nil || trusts(so) {
+			t.Errorf("serverOptions() = %v, trusts the self-signed server: %v; want the system's authorities", err, trusts(so))
+		}
+	})
+	t.Run("flag", func(t *testing.T) {
+		t.Setenv(caFileEnv, "")
+		so, err := serverOptions(Options{}, flags{caFiles: []string{good}})
+		if err != nil || !trusts(so) {
+			t.Errorf("serverOptions() = %v, trusts: %v", err, trusts(so))
+		}
+	})
+	t.Run("env", func(t *testing.T) {
+		t.Setenv(caFileEnv, filepath.Join(dir, "none.pem")+string(os.PathListSeparator)+good)
+		if _, err := serverOptions(Options{}, flags{}); err == nil {
+			t.Error("a missing file in the variable was accepted")
+		}
+		t.Setenv(caFileEnv, good)
+		so, err := serverOptions(Options{}, flags{})
+		if err != nil || !trusts(so) {
+			t.Errorf("serverOptions() = %v, trusts: %v", err, trusts(so))
+		}
+	})
+	t.Run("flag beats env", func(t *testing.T) {
+		t.Setenv(caFileEnv, bad)
+		so, err := serverOptions(Options{}, flags{caFiles: []string{good}})
+		if err != nil || !trusts(so) {
+			t.Errorf("serverOptions() = %v, trusts: %v", err, trusts(so))
+		}
+	})
+	t.Run("egress policy", func(t *testing.T) {
+		t.Setenv(caFileEnv, good)
+		so, err := serverOptions(Options{}, flags{egress: "public", egressAllow: []string{"127.0.0.1"}})
+		if err != nil || so.Egress == nil || !trusts(so) {
+			t.Errorf("serverOptions() = %v, trusts: %v", err, trusts(so))
+		}
+	})
+	t.Run("not PEM", func(t *testing.T) {
+		_, err := serverOptions(Options{}, flags{caFiles: []string{bad}})
+		if err == nil || !strings.Contains(err.Error(), "--ca-file") {
+			t.Errorf("serverOptions() = %v, want a --ca-file error", err)
+		}
+	})
 }
