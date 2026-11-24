@@ -87,9 +87,7 @@ var clientFlags = []string{"trusted-proxies", "client-max-sessions", "client-egr
 // hosted inspector doesn't have.
 var startupFlags = []string{"agent-card", "endpoint", "transport", "a2a-version", "auth", "svc-param", "webhook-url"}
 
-// caFileEnv names the environment variable that works like --ca-file. Go
-// reads SSL_CERT_FILE only on Linux and other Unixes, and then in place of
-// the system's authorities, so the inspector has a variable of its own.
+// caFileEnv names the environment variable that works like --ca-file.
 const caFileEnv = "A2A_INSPECTOR_CA_FILE"
 
 // pluginName is the command the a2a CLI runs the inspector as: a2a inspector.
@@ -334,9 +332,10 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 	}
 	files := f.caFiles
 	if len(files) == 0 {
-		files = filepath.SplitList(os.Getenv(caFileEnv))
+		// Blank entries of the variable, such as from a trailing separator,
+		// are skipped; an empty --ca-file fails like a missing file.
+		files = slices.DeleteFunc(filepath.SplitList(os.Getenv(caFileEnv)), func(s string) bool { return strings.TrimSpace(s) == "" })
 	}
-	files = slices.DeleteFunc(slices.Clone(files), func(s string) bool { return strings.TrimSpace(s) == "" })
 	pool, err := trust.Pool(files...)
 	if err != nil {
 		return so, fmt.Errorf("--ca-file: %w", err)
@@ -353,7 +352,6 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 		if err != nil {
 			return so, fmt.Errorf("--egress-allow: %w", err)
 		}
-		policy.RootCAs = pool
 		so.Egress = policy
 	default:
 		return so, fmt.Errorf(`--egress: %q isn't "any" or "public"`, f.egress)

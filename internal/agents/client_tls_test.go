@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestGRPCConnRootCAs(t *testing.T) {
@@ -58,12 +59,12 @@ func TestGRPCConnRootCAs(t *testing.T) {
 		defer func() { _ = conn.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return status.Code(conn.Invoke(ctx, "/x.Y/Z", &struct{}{}, &struct{}{}))
+		return status.Code(conn.Invoke(ctx, "/x.Y/Z", &emptypb.Empty{}, &emptypb.Empty{}))
 	}
 	if got := code(&Dialer{}); got != codes.Unavailable {
 		t.Errorf("without the CA: %v, want Unavailable", got)
 	}
-	if got := code(&Dialer{RootCAs: pool}); got == codes.Unavailable {
-		t.Errorf("with the CA: %v, want the handshake to succeed", got)
+	if got := code(&Dialer{RootCAs: pool}); got != codes.Unimplemented {
+		t.Errorf("with the CA: %v, want Unimplemented, from a good handshake", got)
 	}
 }

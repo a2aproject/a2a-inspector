@@ -16,6 +16,8 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -36,9 +38,11 @@ import (
 	a2agrpcv1 "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
+	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"github.com/a2aproject/a2a-inspector/internal/traffic"
 	"github.com/a2aproject/a2a-inspector/internal/validate"
 	"google.golang.org/grpc"
+	grpccreds "google.golang.org/grpc/credentials"
 )
 
 // seen records what the test agent received.
@@ -589,5 +593,49 @@ func checkNotification(t *testing.T, n notification, version, taskID string) {
 		t.Errorf("findings for %s: %+v", n.Payload.Raw, f)
 	case version == "0.3" && (len(f) != 1 || f[0].Rule != "notification-version" || f[0].Severity != validate.SeverityInfo):
 		t.Errorf("findings for %s: %+v, want only notification-version", n.Payload.Raw, f)
+	}
+}
+
+// TestRootCAs checks that RootCAs reach HTTP and gRPC connections to agents,
+// with and without an egress policy, and that without them the error says
+// how to trust the agent.
+func TestRootCAs(t *testing.T) {
+	handler := a2asrv.NewHandler(echoExecutor(&seen{}))
+	httpAgent := httptest.NewTLSServer(a2asrv.NewJSONRPCHandler(handler))
+	t.Cleanup(httpAgent.Close)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs := grpc.NewServer(grpc.Creds(grpccreds.NewTLS(&tls.Config{Certificates: httpAgent.TLS.Certificates})))
+	a2agrpcv1.NewHandler(handler).RegisterWith(gs)
+	go func() { _ = gs.Serve(ln) }()
+	t.Cleanup(gs.Stop)
+	pool := x509.NewCertPool()
+	pool.AddCert(httpAgent.Certificate())
+
+	for _, c := range []struct{ binding, url string }{
+		{"JSONRPC", httpAgent.URL},
+		{"GRPC", "https://" + ln.Addr().String()},
+	} {
+		for _, withEgress := range []bool{false, true} {
+			for _, roots := range []*x509.CertPool{nil, pool} {
+				opts := Options{RootCAs: roots}
+				if withEgress {
+					if opts.Egress, err = egress.New([]string{"127.0.0.1"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s := newServer(t, opts)
+				conn := s.connect(t, fmt.Sprintf(`{"interface":{"url":%q,"protocolBinding":%q,"protocolVersion":"1.0"}}`, c.url, c.binding))
+				res := s.send(t, conn.ID, `{"compose":{"text":"hi"}}`)
+				if trusted := res.Call.Error == nil; trusted != (roots != nil) {
+					t.Errorf("%s with CA %v, egress %v: error %+v", c.binding, roots != nil, withEgress, res.Call.Error)
+				}
+				if c.binding == "JSONRPC" && roots == nil && res.Call.Error != nil && !strings.Contains(res.Call.Error.Message, "--ca-file") {
+					t.Errorf("the error doesn't say how to trust the agent: %s", res.Call.Error.Message)
+				}
+			}
+		}
 	}
 }

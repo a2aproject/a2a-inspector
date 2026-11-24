@@ -23,8 +23,6 @@ package egress
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -46,9 +44,6 @@ type Policy struct {
 	allowHosts []string
 	// OnBlock, if set, is called with every destination the policy blocks.
 	OnBlock func(host string, err error)
-	// RootCAs, if set, are the certificate authorities Transport trusts for
-	// HTTPS, in place of the system's.
-	RootCAs *x509.CertPool
 
 	lookup    func(ctx context.Context, host string) ([]netip.Addr, error)
 	proxyFunc func(*url.URL) (*url.URL, error)
@@ -218,9 +213,6 @@ func (p *Policy) dialChecked(ctx context.Context, network, addr string) (net.Con
 func (p *Policy) Transport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = p.DialContext
-	if p.RootCAs != nil {
-		t.TLSClientConfig = &tls.Config{RootCAs: p.RootCAs}
-	}
 	t.Proxy = func(req *http.Request) (*url.URL, error) {
 		return p.proxy(req.Context(), req.URL)
 	}

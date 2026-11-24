@@ -534,10 +534,7 @@ func TestCAFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	trusts := func(so server.Options) bool {
-		var rt http.RoundTripper = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: so.RootCAs}}
-		if so.Egress != nil {
-			rt = so.Egress.Transport()
-		}
+		rt := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: so.RootCAs}}
 		resp, err := (&http.Client{Transport: rt}).Get(srv.URL)
 		if err == nil {
 			_ = resp.Body.Close()

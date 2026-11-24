@@ -88,7 +88,7 @@ export A2A_INSPECTOR_CA_FILE=./internal-ca.pem   # several files: separated like
 a2a-inspector -a https://agent.internal.example.com
 ```
 
-`--ca-file` is repeatable and takes precedence over the variable. A self-signed agent's own certificate works as its CA. In Docker, mount the file and point the variable at it: `-v $PWD/internal-ca.pem:/ca.pem:ro -e A2A_INSPECTOR_CA_FILE=/ca.pem`. Go's `SSL_CERT_FILE` isn't enough: it's ignored on macOS and Windows, and elsewhere it replaces the system's authorities.
+`--ca-file` is repeatable and takes precedence over the variable. A self-signed agent's own certificate works as its CA. In Docker, mount the file and point the variable at it: `-v $PWD/internal-ca.pem:/ca.pem:ro -e A2A_INSPECTOR_CA_FILE=/ca.pem`.
 
 Push notifications go to the inspector's webhook receiver at `/hooks/<id>`, which takes requests from anywhere without the session cookie; each webhook has a random ID and token. Agents reach it at the inspector's own address by default. For an agent that can't reach that address, such as one on another machine, give a URL that does, such as a tunnel to the inspector's port, with `--webhook-url` or in the UI.
 
