@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.3](https://github.com/a2aproject/a2a-inspector/compare/v1.0.0-alpha.2...v1.0.0-alpha.3) (2026-11-25)
+
+
+### Features
+
+* trust extra CA certificates for agents (--ca-file) ([#248](https://github.com/a2aproject/a2a-inspector/issues/248)) ([af596c5](https://github.com/a2aproject/a2a-inspector/commit/af596c541b85392db6cbf9abe099f97b707a5fb9))
+
 ## [1.0.0-alpha.2](https://github.com/a2aproject/a2a-inspector/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-11-09)
 
 
