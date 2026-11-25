@@ -138,6 +138,7 @@ func (s *Server) newSession(id string, q *clientQuota) *session {
 			GRPCDialOptions: append(log.DialOptions(), grpcOptions...),
 			Transports:      s.opts.Transports,
 			Egress:          s.opts.Egress,
+			RootCAs:         s.opts.RootCAs,
 		},
 		secrets: newSecretStore(!s.opts.Hosted),
 		conns:   newConnections(s.opts.Limits.Connections),

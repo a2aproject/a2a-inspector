@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,6 +39,7 @@ import (
 	"github.com/a2aproject/a2a-inspector/internal/egress"
 	"github.com/a2aproject/a2a-inspector/internal/hostagent"
 	"github.com/a2aproject/a2a-inspector/internal/server"
+	"github.com/a2aproject/a2a-inspector/internal/trust"
 	"github.com/a2aproject/a2a-inspector/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -63,6 +66,7 @@ type flags struct {
 	hosted      bool
 	egress      string
 	egressAllow []string
+	caFiles     []string
 	limits      server.Limits
 	trafficMiB  int
 	// given lists the flags set on the command line.
@@ -82,6 +86,9 @@ var clientFlags = []string{"trusted-proxies", "client-max-sessions", "client-egr
 // startupFlags configure an agent and credentials for a single user, which a
 // hosted inspector doesn't have.
 var startupFlags = []string{"agent-card", "endpoint", "transport", "a2a-version", "auth", "svc-param", "webhook-url"}
+
+// caFileEnv names the environment variable that works like --ca-file.
+const caFileEnv = "A2A_INSPECTOR_CA_FILE"
 
 // pluginName is the command the a2a CLI runs the inspector as: a2a inspector.
 const pluginName = "inspector"
@@ -148,6 +155,8 @@ func newCommand(opts Options, stdout, stderr io.Writer, open func(rawURL string)
 		"Listens on all addresses and $PORT (default 8080), and turns off the webhook receiver and environment-variable secrets")
 	fs.StringVar(&f.egress, "egress", "", `Addresses the inspector connects to: "any", or "public" to block loopback, private, link-local (cloud metadata) and other non-public addresses (default "public" with --hosted, otherwise "any")`)
 	fs.StringArrayVar(&f.egressAllow, "egress-allow", nil, "With --egress=public, a CIDR block, IP address, host name or *.domain the inspector may still reach (repeatable)")
+	fs.StringArrayVar(&f.caFiles, "ca-file", nil, "PEM file of certificate authorities to trust for agents' HTTPS and gRPC, in addition to the system's, for agents with a company CA or a self-signed certificate (repeatable). "+
+		"Also read from "+caFileEnv+", a list of files separated like PATH; the flag takes precedence")
 	fs.IntVar(&f.limits.MaxSessions, "max-sessions", 500, "Hosted: sessions kept at once; a new one replaces the session idle the longest")
 	fs.DurationVar(&f.limits.IdleTimeout, "session-idle-timeout", 10*time.Minute, "Hosted: how long a session lives without an open tab or a request")
 	fs.DurationVar(&f.limits.MaxAge, "session-max-age", 8*time.Hour, "Hosted: how long a session lives at most")
@@ -321,6 +330,18 @@ func serverOptions(opts Options, f flags) (server.Options, error) {
 			return so, errors.New("--trusted-proxies must be at least 1")
 		}
 	}
+	files := f.caFiles
+	if len(files) == 0 {
+		// Blank entries of the variable, such as from a trailing separator,
+		// are skipped; an empty --ca-file fails like a missing file.
+		files = slices.DeleteFunc(filepath.SplitList(os.Getenv(caFileEnv)), func(s string) bool { return strings.TrimSpace(s) == "" })
+	}
+	pool, err := trust.Pool(files...)
+	if err != nil {
+		return so, fmt.Errorf("--ca-file: %w", err)
+	}
+	so.RootCAs = pool
+
 	switch egressMode(f) {
 	case "any":
 		if len(f.egressAllow) > 0 {

@@ -20,6 +20,8 @@ import (
 	"cmp"
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -68,6 +70,10 @@ type Options struct {
 	Limits Limits
 	// Egress, if set, limits which addresses the inspector connects to.
 	Egress *egress.Policy
+	// RootCAs, if set, are the certificate authorities trusted for HTTPS and
+	// gRPC connections to agents, in place of the system's: the system's plus
+	// a company's own. An HTTPTransport passed in is used as is.
+	RootCAs *x509.CertPool
 	// Logger, if set, receives hosted-mode events: sessions, blocked
 	// destinations and the host agent's model errors. It never gets traffic.
 	Logger *log.Logger
@@ -178,9 +184,17 @@ func New(opts Options) (*Server, error) {
 	}
 	if s.transport == nil {
 		s.transport = http.DefaultTransport
-		if opts.Egress != nil {
-			s.transport = opts.Egress.Transport()
+		if opts.Egress != nil || opts.RootCAs != nil {
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			if opts.Egress != nil {
+				t = opts.Egress.Transport()
+			}
+			if opts.RootCAs != nil {
+				t.TLSClientConfig = &tls.Config{RootCAs: opts.RootCAs}
+			}
+			s.transport = t
 		}
+		s.transport = trustHint{s.transport}
 		if opts.WrapHTTPTransport != nil {
 			s.transport = opts.WrapHTTPTransport(s.transport)
 		}
